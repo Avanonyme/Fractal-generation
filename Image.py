@@ -103,7 +103,7 @@ class IMAGE():
         #self.Plot(self.z,"anisotropic_diffusion",parameters["dir"])
         #Binary map
         conv=self.Local_treshold(conv) 
-        frac_entire=binary_dilation((canny(conv)+self.Local_treshold(conv*(-1)) +sobel(conv)))
+        frac_entire=binary_dilation((canny(conv)+self.Local_treshold(conv*(-1)) +sobel(conv)),iterations=2)
         # Save image
         self.Plot(frac_entire,"canny",parameters["dir"])
     ### IMAGE HANDLER ###
@@ -301,9 +301,9 @@ if __name__=='__main__':
     "cmap":"Greys",
     "coord":np.array([[-1,1],[-1,1]]),
     "degree": random.randint(5,20),
-    "rand_coef": True,
-    "coef": None, #Must have value if rand_coef==False
-    "dpi": 3000,
+    "rand_coef": False,
+    "coef": [1j,1,1j,1j,1j,0,0], #Must have value if rand_coef==False
+    "dpi": 1000,
     "itermax":150,
 
     # RFA

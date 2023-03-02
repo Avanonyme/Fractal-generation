@@ -123,30 +123,9 @@ class RFA_fractal():
         print("Done (RFA-choose_polynomial)")
         return self.coef
     
-    def taylor_approx(self,func):
-        """return taylor appoximation of a function"""
-    
     
     ## ROOT FINDING ALGORITHMS
-    def Newton_method_2(self,epsilon=1.e-10,itermax=300):
-        """Newton method"""
-        print("RFA-Newton method (scipy)...")
-        #initialisation
-        flat=self.array.flatten()
-        #np.savetxt("flat.txt",flat)
-
-        Root_obj=np.vectorize(root_scalar)
-        R=Root_obj(self.polynomial_compute,method='newton',x0=flat,fprime=True, fprime2=True, xtol=epsilon, maxiter=itermax)
-        np.savetxt("ro.txt",R)
-        iter_count_arr=Root_obj.iterations.reshape(self.array.shape)
-        pts_conv=Root_obj.root.reshape(self.array.shape)
-
-        self.z=iter_count_arr
-
-        print("Done (RFA-Newton method)")
-        return iter_count_arr,pts_conv
-
-    def Newton_method(self,epsilon=1.e-5,itermax=100):
+    def Newton_method(self,epsilon=1.e-5,itermax=50):
         """Newton method"""
         print("RFA-Newton method...")
         #initialisation
@@ -170,7 +149,7 @@ class RFA_fractal():
             
             #Newton Method
             fonction=self.polynomial_compute(z,fp=True) #f, fprime
-            dx=-fonction[0]/fonction[1]
+            dx=-fonction[0]/fonction[1]+0.15
             z[activeindex]=z[activeindex]+dx[activeindex]
             prec[activeindex]=abs(dx[activeindex])
             i+=1
@@ -226,7 +205,7 @@ class RFA_fractal():
         print("Done (RFA-Gloabal Newton method)")
         return z
 
-    def Halley_method(self,epsilon=1.e-16,itermax=100):
+    def Halley_method(self,epsilon=1.e-16,itermax=50):
         """Global Newton method with damping factor a-> a/2"""
         print("RFA-Halley method")
         #initialisation
@@ -235,15 +214,16 @@ class RFA_fractal():
         dx=np.zeros_like(self.array) #step
         i=0 #count, used to calculate the fractal
         z=self.array.copy()
+        ziter=np.empty_like(self.array)
 
-        a=1+1/2j #damping factor
+        a=1+1/4j #damping factor
 
         while np.any(activepoint==True) and i<=itermax:
 
             #checking for points precision reaching epsilon 
             e=np.where(prec<epsilon) #checking which points converged
             activepoint[e]=0 #taking out those points 
-            z[e]=i #noting the count value of those points
+            ziter[e]=i #noting the count value of those points
             prec[e]=100 #taking out the precision at those points
             activeindex=activepoint.nonzero() #updating the active indexes
             
@@ -255,21 +235,35 @@ class RFA_fractal():
             z[activeindex]=z[activeindex]+a*dx[activeindex]
             prec[activeindex]=abs(a*dx[activeindex])
             i+=1
+            print(i,end="\r")
         #Assigning a value to points that haven't converged
-        z[activepoint==True]=i
+        ziter[activepoint==True]=i
+        z[activepoint==True]=0
 
-        self.z=z
+        self.z=ziter
+        z=np.around(z,4)
 
         print("Done (RFA-Halley method)")
-        return z     
+        return ziter,z   
 
     def Secant_method(self,epsilon=1.e-16,itermax=100):
         """Secant method"""
         print("RFA-Secant method")
+        return 0
 
     def Bairstow_method(self,epsilon=1.e-16,itermax=100):
         """Bairstow method"""
         print("RFA-Bairstow method")
+        return 0
 
-class RFA_fractal_multivar():
-    pass
+
+class RFA_Fractal_Nova():
+
+    def __init__(self, param, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+
+    #def Nova_Newton_method(self,epsilon=1.e-16,itermax=100):
+
+       
