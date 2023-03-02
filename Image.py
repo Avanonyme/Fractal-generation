@@ -93,14 +93,6 @@ class IMAGE():
         parameters["dir"]=self.IM_DIR+"/fractal"
         conv=self.Fractal_image(parameters)
         
-
-
-
-
-        # Apply filters
-        #conv=self.Unsharp_masking(conv,sigma=1.5,amount=1)
-        #self.Anisotropic_diffusion(self.z,niter=10,kappa=70,gamma=0.25,step=(1.,1.),option=1)
-        #self.Plot(self.z,"anisotropic_diffusion",parameters["dir"])
         #Binary map
         conv=self.Local_treshold(conv) 
         frac_entire=binary_dilation((canny(conv)+self.Local_treshold(conv*(-1)) +sobel(conv)),iterations=2)
