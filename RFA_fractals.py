@@ -17,6 +17,174 @@ def plot(array,name,cmap=LinearSegmentedColormap.from_list("lambdacmap",["black"
     ax.imshow(array,cmap=cmap)
     fig.savefig(f"{name}.png",dpi=dpi)
 
+class Polynomials():
+    def __init__(self,func=[],random_poly=True,form="root",**kwargs):
+        """
+        func: list of roots or coefficients. If form=="taylor_approx", func is a function (ex. lambda z: sin(z))
+        random_poly: True or False (if True, func is ignored)
+        form: "root","coef","taylor_approx" (if random_poly==True, form is ignored)
+        """
+        self.__dict__.update(kwargs)
+
+
+        if random_poly==True:
+            self.coefs=self.choose_poly(self.__dict__.get("max_degree"))
+            self.roots=self.coefficients_to_roots(self.coefs)
+        
+        else: #random_poly==False
+            if func==[]:
+                raise ValueError("No function given")
+
+            if form=="root":
+                self.roots=func
+                self.coefs=self.roots_to_coefficients(self.roots)
+
+            elif form=="coef":
+                self.coefs=func
+                self.roots=self.coefficients_to_roots(self.coefs)
+
+            elif form=="taylor_approx":
+                self.coefs=self.taylor_approximation(funcm,degree=self.__dict__.get("degree"),interval=self.__dict__.get("interval"))
+                self.roots=self.coefficients_to_roots(self.coefs)
+
+
+        ### POLYNOMIALS ###
+    # Code taken from https://github.com/3b1b/videos/blob/master/_2022/quintic/roots_and_coefs.py
+
+    def roots_to_coefficients(roots):
+        """Convert roots form poly to coefficients form poly"""
+    n = len(list(roots))
+    return [
+        ((-1)**(n - k)) * sum(
+            np.prod(tup)
+            for tup in it.combinations(roots, n - k)
+        )
+        for k in range(n)
+    ] + [1]
+
+
+    def poly(z, coefs):
+        """Evaluate polynomial at z with coefficients coefs"""
+        return sum(coefs[k] * z**k for k in range(len(coefs)))
+
+
+    def dpoly(z, coefs):
+        """Derivative of poly(z, coefs)"""
+        return sum(k * coefs[k] * z**(k - 1) for k in range(1, len(coefs)))
+
+    def d2poly(z,coefs):
+        """Second derivative of poly(z, coefs)"""
+        return sum(k*(k-1)*coefs[k]*z**(k-2) for k in range(2,len(coefs)))
+
+
+    def find_root(func, dfunc, seed=complex(1, 1), tol=1e-8, max_steps=100):
+        # Use newton's method
+        last_seed = np.inf
+        for n in range(max_steps):
+            if abs(seed - last_seed) < tol:
+                break
+            last_seed = seed
+            seed = seed - func(seed) / dfunc(seed)
+        return seed
+
+
+    def coefficients_to_roots(coefs):
+        """Find roots of polynomial with coefficients coefs"""
+        if len(coefs) == 0:
+            return []
+        elif coefs[-1] == 0:
+            return coefficients_to_roots(coefs[:-1])
+        roots = []
+        # Find a root, divide out by (z - root), repeat
+        for i in range(len(coefs) - 1):
+            root = find_root(
+                lambda z: poly(z, coefs),
+                lambda z: dpoly(z, coefs),
+            )
+            roots.append(root)
+            new_reversed_coefs, rem = np.polydiv(coefs[::-1], [1, -root])
+            coefs = new_reversed_coefs[::-1]
+        return roots
+
+    def taylor_approximation(func,degree,interval):
+        """Taylor approximation of function func"""
+        if degree is None:
+            degree=5
+        if interval is None:
+            interval=1
+        
+        from scipy.interpolate import approximate_taylor_polynomial
+
+        return approximate_taylor_polynomial(func,0,degree,interval).c
+
+    def choose_poly(max_degree):
+        """Choose random polynomial"""
+        if max_degree<2 or max_degree is None:
+            print("max_degree must be >=2. Setting to 8")
+            max_degree=8
+        degree=random.randint(2,max_degree)
+        coefs=[complex(random.uniform(-10,10),random.uniform(-10,10)) for i in range(degree)]
+        return coefs
+
+
+class RFA_Fractal():
+
+    def __init__(self, config, **kwargs):
+        
+        self.config = config
+        self.__dict__.update(kwargs)
+
+        self.array = self.init_array(config["N"],config["domain"])
+
+        self.poly = Polynomials(func=config["func"],random_poly=config["random"],form=config["form"],**kwargs)
+
+        #check if poly converges ok with sample of domain
+        if config["random"]==True
+            while True:
+                z=self.init_array(100,config["domain"])
+
+                if config["method"]=="Newton":
+                    up_treshold=0.35
+                    min_treshold=0.12
+                    z=self.Nova_Newton_method(lambda z: self.poly.poly,lambda z: self.poly.dpoly,z,tol=1.e-05,max_steps=50)
+
+                else: #SAME FOR NOW
+                    up_treshold=0.35
+                    min_treshold=0.12
+                    z=self.Nova_Newton_method(lambda z: self.poly.poly,lambda z: self.poly.dpoly,z,tol=1.e-05,max_steps=50)
+
+                gen_area=z > threshold_mean(z)
+
+                if np.mean(gen_area)>up_treshold:
+                    break
+                elif np.mean(gen_area)<min_treshold:
+                    break     
+                else:
+                    pass
+            print("Chosen roots",self.poly.roots)
+
+    def init_array(self,N,domain):
+        """create array of complex numbers"""
+        real_dom=np.linspace(domain[0,0],domain[0,1],N,endpoint=False) #expanded domain
+        complex_dom=np.linspace(domain[1,0],domain[1,1],N,endpoint=False)
+        return np.array([(item+complex_dom*1j) for i,item in enumerate(real_dom)]).reshape(N,N).transpose() #array of shape (N,N)
+
+    #def Nova_Newton_method(self,func,dfunc,tol=1.e-8,max_steps=100,damping_factor=complex(0.1,0.1),pixel=complex(0.1,0.1)):
+        #flatten array
+
+        #vectorize
+
+        #iterate
+            #count conv steps
+
+        #unflatten
+
+        #return array, conv_steps
+
+    #def Nova_Halley_method(self,tol=1.e-8,max_steps=100,damping_factor=complex(0.1,0.1),pixel=complex(0.1,0.1)):
+
+    #def Nova_Secant_method(self,tol=1.e-8,max_steps=100,damping_factor=complex(0.1,0.1),pixel=complex(0.1,0.1)):
+
 class RFA_fractal():
 
     def __init__(self,parameters) -> None:
@@ -123,30 +291,9 @@ class RFA_fractal():
         print("Done (RFA-choose_polynomial)")
         return self.coef
     
-    def taylor_approx(self,func):
-        """return taylor appoximation of a function"""
-    
-    
+
     ## ROOT FINDING ALGORITHMS
-    def Newton_method_2(self,epsilon=1.e-10,itermax=300):
-        """Newton method"""
-        print("RFA-Newton method (scipy)...")
-        #initialisation
-        flat=self.array.flatten()
-        #np.savetxt("flat.txt",flat)
-
-        Root_obj=np.vectorize(root_scalar)
-        R=Root_obj(self.polynomial_compute,method='newton',x0=flat,fprime=True, fprime2=True, xtol=epsilon, maxiter=itermax)
-        np.savetxt("ro.txt",R)
-        iter_count_arr=Root_obj.iterations.reshape(self.array.shape)
-        pts_conv=Root_obj.root.reshape(self.array.shape)
-
-        self.z=iter_count_arr
-
-        print("Done (RFA-Newton method)")
-        return iter_count_arr,pts_conv
-
-    def Newton_method(self,epsilon=1.e-5,itermax=100):
+    def Newton_method(self,epsilon=1.e-5,itermax=50):
         """Newton method"""
         print("RFA-Newton method...")
         #initialisation
@@ -170,7 +317,7 @@ class RFA_fractal():
             
             #Newton Method
             fonction=self.polynomial_compute(z,fp=True) #f, fprime
-            dx=-fonction[0]/fonction[1]
+            dx=-fonction[0]/fonction[1]+0.15
             z[activeindex]=z[activeindex]+dx[activeindex]
             prec[activeindex]=abs(dx[activeindex])
             i+=1
@@ -226,7 +373,7 @@ class RFA_fractal():
         print("Done (RFA-Gloabal Newton method)")
         return z
 
-    def Halley_method(self,epsilon=1.e-16,itermax=100):
+    def Halley_method(self,epsilon=1.e-16,itermax=50):
         """Global Newton method with damping factor a-> a/2"""
         print("RFA-Halley method")
         #initialisation
@@ -235,15 +382,16 @@ class RFA_fractal():
         dx=np.zeros_like(self.array) #step
         i=0 #count, used to calculate the fractal
         z=self.array.copy()
+        ziter=np.empty_like(self.array)
 
-        a=1+1/2j #damping factor
+        a=1+1/4j #damping factor
 
         while np.any(activepoint==True) and i<=itermax:
 
             #checking for points precision reaching epsilon 
             e=np.where(prec<epsilon) #checking which points converged
             activepoint[e]=0 #taking out those points 
-            z[e]=i #noting the count value of those points
+            ziter[e]=i #noting the count value of those points
             prec[e]=100 #taking out the precision at those points
             activeindex=activepoint.nonzero() #updating the active indexes
             
@@ -255,21 +403,18 @@ class RFA_fractal():
             z[activeindex]=z[activeindex]+a*dx[activeindex]
             prec[activeindex]=abs(a*dx[activeindex])
             i+=1
+            print(i,end="\r")
         #Assigning a value to points that haven't converged
-        z[activepoint==True]=i
+        ziter[activepoint==True]=i
+        z[activepoint==True]=0
 
-        self.z=z
+        self.z=ziter
+        z=np.around(z,4)
 
         print("Done (RFA-Halley method)")
-        return z     
+        return ziter,z   
 
     def Secant_method(self,epsilon=1.e-16,itermax=100):
         """Secant method"""
         print("RFA-Secant method")
-
-    def Bairstow_method(self,epsilon=1.e-16,itermax=100):
-        """Bairstow method"""
-        print("RFA-Bairstow method")
-
-class RFA_fractal_multivar():
-    pass
+        return 0

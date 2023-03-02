@@ -93,17 +93,9 @@ class IMAGE():
         parameters["dir"]=self.IM_DIR+"/fractal"
         conv=self.Fractal_image(parameters)
         
-
-
-
-
-        # Apply filters
-        #conv=self.Unsharp_masking(conv,sigma=1.5,amount=1)
-        #self.Anisotropic_diffusion(self.z,niter=10,kappa=70,gamma=0.25,step=(1.,1.),option=1)
-        #self.Plot(self.z,"anisotropic_diffusion",parameters["dir"])
         #Binary map
         conv=self.Local_treshold(conv) 
-        frac_entire=binary_dilation((canny(conv)+self.Local_treshold(conv*(-1)) +sobel(conv)))
+        frac_entire=binary_dilation((canny(conv)+self.Local_treshold(conv*(-1)) +sobel(conv)),iterations=2)
         # Save image
         self.Plot(frac_entire,"canny",parameters["dir"])
     ### IMAGE HANDLER ###
@@ -301,9 +293,9 @@ if __name__=='__main__':
     "cmap":"Greys",
     "coord":np.array([[-1,1],[-1,1]]),
     "degree": random.randint(5,20),
-    "rand_coef": True,
-    "coef": None, #Must have value if rand_coef==False
-    "dpi": 3000,
+    "rand_coef": False,
+    "coef": [1j,1,1j,1j,1j,0,0], #Must have value if rand_coef==False
+    "dpi": 1000,
     "itermax":150,
 
     # RFA
