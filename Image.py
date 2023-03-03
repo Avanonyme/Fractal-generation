@@ -62,34 +62,33 @@ class IMAGE():
         plt.close(fig)
         return None
     
+    ### FRACTAL IMAGE ###
     def Fractal_image(self, parameters):
         print("Fractal_image (IM-Fim)...")
 
         try: os.mkdir(self.FRAC_DIR)
         except: pass
 
-        frac_param={"degree":parameters["degree"],
-                    "coord":parameters["coord"],
-                    "dpi":parameters["dpi"],
-                    "rand_coef":parameters["rand_coef"],
-                    "coef":parameters["coef"]}
+        frac_param={
+            "N":1000,
+            "domain":np.array([[-1,1],[-1,1]]),
+
+            "random":True,
+            "func":[1,-1/2+np.sqrt(3)/2*1j,-1/2-np.sqrt(3)/2*1j],
+            "form": "root",
+
+            "method":"Newton",
+
+        }
 
         frac_obj=RFA_fractal(frac_param)
 
-        self.z,conv=frac_obj.Newton_method()
-
+        self.z,conv=frac_obj.Nova_Halley_method(frac_obj.array,lambda z: frac_obj.poly.poly(z,frac_obj.coefs),lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs),1.e-05,50)
         self.z,conv=self.z.real,conv.real
-        self.z=abs(self.z-np.max(self.z))
-
         self.file_name="fractal_array"
         self.Plot(self.z,self.file_name,parameters["dir"])
         self.Plot(conv,"convergence",parameters["dir"])
 
-        print("Done (IM-Fim)")
-
-        return conv
-
-    def Image_maker(self,parameters):
         parameters["dir"]=self.IM_DIR+"/fractal"
         conv=self.Fractal_image(parameters)
         
@@ -97,7 +96,17 @@ class IMAGE():
         conv=self.Local_treshold(conv) 
         frac_entire=binary_dilation((canny(conv)+self.Local_treshold(conv*(-1)) +sobel(conv)),iterations=2)
         # Save image
-        self.Plot(frac_entire,"canny",parameters["dir"])
+        self.Plot(frac_entire,"edges",parameters["dir"])
+
+        print("Done (IM-Fim)")
+
+        return conv
+    
+    def Orbit_trap(self,parameters):
+        pass
+
+    def adaptive_antialiasing(self,parameters):
+        pass
     ### IMAGE HANDLER ###
     def crop(self,im_path):
         image=PILIM.open(im_path)
@@ -140,146 +149,14 @@ class IMAGE():
 
 
     ############RENDERING#################
-    def Rendering_3D(self,parameters,image):
-        "takes 2D image as input and output 3D heightmap"
-        pass
     ### COLORS ###
 
     ### FILTERS ###
     def Local_treshold(self,array):
         """Local treshold filter"""
-        #mask=array>threshold_otsu(self.z) 
-        #array=(mask)*array
         return array>threshold_local(array)
 
-    def Contrast(self,array,niter=10,kappa=50,gamma=0.1,step=(1.,1.),option=1):
-        """Contrast filter"""
-        return array-self.Anisotropic_diffusion(array,niter=niter,kappa=kappa,gamma=gamma,step=step,option=option)
-    
-    def Anisotropic_diffusion(self,array,niter=1,kappa=50,gamma=0.1,step=(1.,1.),option=1):
-        """
-        Anisotropic diffusion.
-    
-        Usage:
-        imgout = anisodiff(im, niter, kappa, gamma, option)
-    
-        Arguments:
-                img    - input image
-                niter  - number of iterations
-                kappa  - conduction coefficient 20-100 ?
-                gamma  - max value of .25 for stability
-                step   - tuple, the distance between adjacent pixels in (y,x)
-                option - 1 Perona Malik diffusion equation No 1
-                        2 Perona Malik diffusion equation No 2
-                ploton - if True, the image will be plotted on every iteration
-    
-        Returns:
-                imgout   - diffused image.
-    
-        kappa controls conduction as a function of gradient.  If kappa is low
-        small intensity gradients are able to block conduction and hence diffusion
-        across step edges.  A large value reduces the influence of intensity
-        gradients on conduction.
-    
-        gamma controls speed of diffusion (you usually want it at a maximum of
-        0.25)
-    
-        step is used to scale the gradients in case the spacing between adjacent
-        pixels differs in the x and y axes
-    
-        Diffusion equation 1 favours high contrast edges over low contrast ones.
-        Diffusion equation 2 favours wide regions over smaller ones.
-    
-        Reference: 
-        P. Perona and J. Malik. 
-        Scale-space and edge detection using ansotropic diffusion.
-        IEEE Transactions on Pattern Analysis and Machine Intelligence, 
-        12(7):629-639, July 1990.
-    
-        Original MATLAB code by Peter Kovesi  
-        School of Computer Science & Software Engineering
-        The University of Western Australia
-        pk @ csse uwa edu au
-        <http://www.csse.uwa.edu.au>
-    
-        Translated to Python and optimised by Alistair Muldal
-        Department of Pharmacology
-        University of Oxford
-        <alistair.muldal@pharm.ox.ac.uk>
-    
-        June 2000  original version.       
-        March 2002 corrected diffusion eqn No 2.
-        July 2012 translated to Python
-        """
-        # initialize output array
-        img = array.astype('float32')
-        imgout = img.copy()
-    
-        # initialize some internal variables
-        deltaS = np.zeros_like(imgout)
-        deltaE = deltaS.copy()
-        NS = deltaS.copy()
-        EW = deltaS.copy()
-        gS = np.ones_like(imgout)
-        gE = gS.copy()
-    
-        for ii in range(niter):
-    
-            # calculate the diffs
-            deltaS[:-1,: ] = np.diff(imgout,axis=0)
-            deltaE[: ,:-1] = np.diff(imgout,axis=1)
-    
-            # conduction gradients (only need to compute one per dim!)
-            if option == 1:
-                gS = np.exp(-(deltaS/kappa)**2.)/step[0]
-                gE = np.exp(-(deltaE/kappa)**2.)/step[1]
-            elif option == 2:
-                gS = 1./(1.+(deltaS/kappa)**2.)/step[0]
-                gE = 1./(1.+(deltaE/kappa)**2.)/step[1]
-    
-            # update matrices
-            E = gE*deltaE
-            S = gS*deltaS
-    
-            # subtract a copy that has been shifted 'North/West' by one
-            # pixel. don't ask questions. just do it. trust me.
-            NS[:] = S
-            EW[:] = E
-            NS[1:,:] -= S[:-1,:]
-            EW[:,1:] -= E[:,:-1]
-    
-            # update the image
-            imgout += gamma*(NS+EW)
 
-    
-        return imgout
-
-    def Unsharp_masking(self,array, sigma=1, amount=1):
-        """Unsharp masking filter"""
-        blurred = gaussian_filter(array, sigma=sigma)
-        return array + amount * (array - blurred)
-
-    ### SHADERS ###
-    def Phong_shader(self,array,light_direction,base_color):
-        from scipy.spatial import Delaunay
-
-        # Calculate the normal vectors at each vertex of the mesh
-        tri = Delaunay(array)
-        normals = np.cross(tri.points[tri.vertices[:,1]] - tri.points[tri.vertices[:,0]],
-                        tri.points[tri.vertices[:,2]] - tri.points[tri.vertices[:,0]])
-
-        # Calculate the illumination at each vertex using Phong shading
-        illumination = np.sum(light_direction * normals, axis=1)
-
-        # Apply the illumination to the colors of each vertex
-        colors = base_color * illumination
-        #Does this works?
-
-    def Fresnel_shader(self,array,light_direction,base_color):
-        pass
-    def Normal_mapping(self,array,light_direction,base_color):
-        pass
-        
 
 if __name__=='__main__':
     parameters={
