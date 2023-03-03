@@ -36,7 +36,10 @@ class IMAGE():
         ### Create folders
         self.APP_DIR = os.path.dirname(os.path.abspath(__file__))
         self.IM_DIR=os.path.join(self.APP_DIR,"images")
+        self.FRAC_DIR=os.path.join(self.IM_DIR,"fractal")
         try: os.mkdir(self.IM_DIR)
+        except: pass
+        try: os.mkdir(self.FRAC_DIR)
         except: pass
 
         ### Set paramaters
@@ -66,36 +69,78 @@ class IMAGE():
     def Fractal_image(self, parameters):
         print("Fractal_image (IM-Fim)...")
 
-        try: os.mkdir(self.FRAC_DIR)
-        except: pass
-
+        parameters["dir"]=self.FRAC_DIR
         frac_param={
-            "N":1000,
+            "N":300,
             "domain":np.array([[-1,1],[-1,1]]),
 
             "random":True,
             "func":[1,-1/2+np.sqrt(3)/2*1j,-1/2-np.sqrt(3)/2*1j],
             "form": "root",
 
-            "method":"Newton",
+            "method":"Nova Newton",
 
         }
 
         frac_obj=RFA_fractal(frac_param)
+        frac_param["func"]=frac_obj.coefs
 
-        self.z,conv=frac_obj.Nova_Halley_method(frac_obj.array,lambda z: frac_obj.poly.poly(z,frac_obj.coefs),lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs),1.e-05,50)
-        self.z,conv=self.z.real,conv.real
+        if "Nova" in frac_param["method"]:
+            c=frac_obj.array #corresponding pixel to complex plane
+            shape=c.shape
+            c=c.flatten()
+
+            c_coefs=frac_obj.poly.add_c_to_coefs(c,frac_param["func"],frac_param["random"])
+
+            #assuming that the c-length is on axis 0
+            print("Computing roots...",end="\r")
+            d2roots=np.empty(c_coefs.shape[0],dtype=complex)
+            for i in range(c_coefs.shape[0]):
+                d2coefs=np.array([],dtype=complex)
+                for k in range(2,len(c_coefs[i])):
+                    d2coefs=np.append(d2coefs,k*(k-1)*c_coefs[i,k])
+                d2roots[i]=np.roots(d2coefs)[0]
+            print("Computing roots...Done")
+
+            #print(d2roots.shape,c.shape) #should be equal
+
+            if "Newton" in frac_param["method"]:
+                self.z,conv=frac_obj.Nova_Newton_method(d2roots, #z0
+                                                        lambda z: np.array([frac_obj.poly.poly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f
+                                                        lambda z: np.array([frac_obj.poly.dpoly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f'
+                                                        tol=1.e-05,
+                                                        max_steps=50,
+                                                        damping=complex(1,0.2))
+
+
+                self.z,conv=self.z.reshape(shape),conv.reshape(shape)
+
+                self.z,conv=self.z.real,conv.real
+
+                #Binary map
+                frac_entire=self.Local_treshold(conv)         
+       
+        
+        else:
+            if "Newton" in frac_param["method"]:                
+                self.z,conv=frac_obj.Newton_method(frac_obj.array,
+                                                    lambda z: frac_obj.poly.poly(z,frac_obj.coefs),
+                                                    lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),
+                                                    1.e-05,
+                                                    50,
+                                                    complex(1,0.2))
+                self.z,conv=self.z.real,conv.real
+
+                #Binary map
+                #frac_entire=self.Local_treshold(conv) 
+                frac_entire=binary_dilation((canny(conv)+self.Local_treshold(conv*(-1)) +sobel(conv)),iterations=2)
+
         self.file_name="fractal_array"
+        parameters["dir"]=self.IM_DIR+"/fractal"
+
+        # Save images
         self.Plot(self.z,self.file_name,parameters["dir"])
         self.Plot(conv,"convergence",parameters["dir"])
-
-        parameters["dir"]=self.IM_DIR+"/fractal"
-        conv=self.Fractal_image(parameters)
-        
-        #Binary map
-        conv=self.Local_treshold(conv) 
-        frac_entire=binary_dilation((canny(conv)+self.Local_treshold(conv*(-1)) +sobel(conv)),iterations=2)
-        # Save image
         self.Plot(frac_entire,"edges",parameters["dir"])
 
         print("Done (IM-Fim)")
@@ -174,13 +219,12 @@ if __name__=='__main__':
     "coef": [1j,1,1j,1j,1j,0,0], #Must have value if rand_coef==False
     "dpi": 1000,
     "itermax":150,
-
     # RFA
 }
 
     try:
         obj=IMAGE(parameters)
-        obj.Image_maker(parameters)
+        obj.Fractal_image(parameters)
 
     except KeyboardInterrupt:
         sys.exit()
