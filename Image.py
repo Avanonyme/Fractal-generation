@@ -32,7 +32,7 @@ def clean_dir(folder):
 class IMAGE():
 
     def __init__(self,parameters) -> None:
-        print("Init Image class (IM-Init)...")
+        print("Init Image class...",end="\r")
         ### Create folders
         self.APP_DIR = os.path.dirname(os.path.abspath(__file__))
         self.IM_DIR=os.path.join(self.APP_DIR,"images")
@@ -46,7 +46,7 @@ class IMAGE():
         self.dpi=parameters["dpi"]
         self.cmap=parameters["cmap"]
 
-        print("Done (IM-Init)")
+        print("Init Image class...Done")
     
     ### PLOT ###
     def Plot(self,array,name,Dir,print_create=True):
@@ -67,18 +67,18 @@ class IMAGE():
     
     ### FRACTAL IMAGE ###
     def Fractal_image(self, parameters):
-        print("Fractal_image (IM-Fim)...")
+        print("Fractal_image...",end="\r")
 
         parameters["dir"]=self.FRAC_DIR
         frac_param={
-            "N":300,
+            "N":1000,
             "domain":np.array([[-1,1],[-1,1]]),
 
             "random":True,
-            "func":[1,-1/2+np.sqrt(3)/2*1j,-1/2-np.sqrt(3)/2*1j],
+            "func":[1,-1/2+np.sqrt(3)/2*1j,-1/2-np.sqrt(3)/2*1j,1/2+np.sqrt(3)/2*1j,1/2-np.sqrt(3)/2*1j],
             "form": "root",
 
-            "method":"Nova Newton",
+            "method":"Newton",
 
         }
 
@@ -86,11 +86,16 @@ class IMAGE():
         frac_param["func"]=frac_obj.coefs
 
         if "Nova" in frac_param["method"]:
-            c=frac_obj.array #corresponding pixel to complex plane
-            shape=c.shape
-            c=c.flatten()
+            """
+            M-set fractal like with c-mapping
 
-            c_coefs=frac_obj.poly.add_c_to_coefs(c,frac_param["func"],frac_param["random"])
+            Results are...experimental, and i cant be bothered to fix it
+            Use with caution
+            """
+            c=frac_obj.array #corresponding pixel to complex plane
+            shape=c.shape;c=c.flatten()
+
+            c_coefs=frac_obj.poly.add_c_to_coefs(c,frac_param["func"],frac_param["random"],c_expression=lambda c: np.array([1,(c-1),c-1,1,1,1]))
 
             #assuming that the c-length is on axis 0
             print("Computing roots...",end="\r")
@@ -102,10 +107,11 @@ class IMAGE():
                 d2roots[i]=np.roots(d2coefs)[0]
             print("Computing roots...Done")
 
-            #print(d2roots.shape,c.shape) #should be equal
+        #print(d2roots.shape,c.shape) #should be equal
 
             if "Newton" in frac_param["method"]:
-                self.z,conv=frac_obj.Nova_Newton_method(d2roots, #z0
+
+                self.z,conv,dist=frac_obj.Newton_method(d2roots, #z0
                                                         lambda z: np.array([frac_obj.poly.poly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f
                                                         lambda z: np.array([frac_obj.poly.dpoly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f'
                                                         tol=1.e-05,
@@ -113,42 +119,42 @@ class IMAGE():
                                                         damping=complex(1,0.2))
 
 
-                self.z,conv=self.z.reshape(shape),conv.reshape(shape)
+                self.z,conv,dist=self.z.reshape(shape),conv.reshape(shape),dist.reshape(shape)
 
-                self.z,conv=self.z.real,conv.real
+                self.z,conv,dist=self.z.real,conv.real,dist.real
 
                 #Binary map
-                frac_entire=self.Local_treshold(conv)         
-       
+                frac_entire=binary_dilation(canny(conv),iterations=2)    
+
+    
         
         else:
-            if "Newton" in frac_param["method"]:                
-                self.z,conv=frac_obj.Newton_method(frac_obj.array,
+            if "Newton" in frac_param["method"]: 
+                orbit_form_test=np.array(PILIM.open(parameters["dir"]+"/circle.png",).resize((frac_param["N"],frac_param["N"])).convert("L").point(lambda x: 0 if x < 128 else 255, '1'),dtype=float) ==0
+                self.z,conv,dist=frac_obj.Newton_method(frac_obj.array,
                                                     lambda z: frac_obj.poly.poly(z,frac_obj.coefs),
                                                     lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),
                                                     1.e-05,
                                                     50,
-                                                    complex(1,0.2))
-                self.z,conv=self.z.real,conv.real
-
+                                                    complex(1,0.2),
+                                                    Orbit_trap=True,
+                                                    orbit_form=orbit_form_test,)
+                self.z,conv,dist=self.z.real,conv.real,dist.real
+                
+                self.cmap="magma"
+                self.Plot(dist,"orbit",parameters["dir"],print_create=False)
                 #Binary map
-                #frac_entire=self.Local_treshold(conv) 
                 frac_entire=binary_dilation((canny(conv)+self.Local_treshold(conv*(-1)) +sobel(conv)),iterations=2)
 
         self.file_name="fractal_array"
         parameters["dir"]=self.IM_DIR+"/fractal"
 
         # Save images
-        self.Plot(self.z,self.file_name,parameters["dir"])
-        self.Plot(conv,"convergence",parameters["dir"])
-        self.Plot(frac_entire,"edges",parameters["dir"])
+        self.Plot(self.z,self.file_name,parameters["dir"],print_create=False)
+        self.Plot(conv,"convergence",parameters["dir"],print_create=False)
+        self.Plot(frac_entire,"edges",parameters["dir"],print_create=False)
 
-        print("Done (IM-Fim)")
-
-        return conv
-    
-    def Orbit_trap(self,parameters):
-        pass
+        print("Fractal_image...Done")
 
     def adaptive_antialiasing(self,parameters):
         pass
@@ -223,8 +229,10 @@ if __name__=='__main__':
 }
 
     try:
-        obj=IMAGE(parameters)
-        obj.Fractal_image(parameters)
+        for i in range(1):
+            obj=IMAGE(parameters)
+            obj.Fractal_image(parameters)
+            print("\n\n")
 
     except KeyboardInterrupt:
         sys.exit()
