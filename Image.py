@@ -71,7 +71,7 @@ class IMAGE():
 
         parameters["dir"]=self.FRAC_DIR
         frac_param={
-            "N":1000,
+            "N":8000,
             "domain":np.array([[-1,1],[-1,1]]),
 
             "random":True,
@@ -130,29 +130,39 @@ class IMAGE():
         
         else:
             if "Newton" in frac_param["method"]: 
-                orbit_form_test=np.array(PILIM.open(parameters["dir"]+"/circle.png",).resize((frac_param["N"],frac_param["N"])).convert("L").point(lambda x: 0 if x < 128 else 255, '1'),dtype=float) ==0
-                self.z,conv,dist=frac_obj.Newton_method(frac_obj.array,
+                orbit_form_test=np.array(PILIM.open("images/orbit/"+parameters["raster_image"]+".png",).resize((frac_param["N"]+1,frac_param["N"]+1)).convert("L"),dtype=float)
+
+                self.z,conv,dist,normal=frac_obj.Newton_method(frac_obj.array,
                                                     lambda z: frac_obj.poly.poly(z,frac_obj.coefs),
                                                     lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),
                                                     1.e-05,
                                                     50,
-                                                    complex(1,0.2),
+                                                    complex(1.01,-0.01),
                                                     Orbit_trap=True,
-                                                    orbit_form=orbit_form_test,)
-                self.z,conv,dist=self.z.real,conv.real,dist.real
+                                                    orbit_form=orbit_form_test,
+                                                    d2func=lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs))
                 
-                self.cmap="magma"
-                self.Plot(dist,"orbit",parameters["dir"],print_create=False)
-                #Binary map
-                frac_entire=binary_dilation((canny(conv)+self.Local_treshold(conv*(-1)) +sobel(conv)),iterations=2)
+                lights=(45., 0, 40., 0, 0.5, 1.2, 1)
+                normal=self.blinn_phong(normal,lights)
 
-        self.file_name="fractal_array"
-        parameters["dir"]=self.IM_DIR+"/fractal"
+                self.z,conv,dist=self.z.real,conv.real,dist.real
+                self.shaded=normal
+                #self.Plot(dist*self.z,"normal",parameters["dir"],print_create=False)
+                self.Plot(normal,parameters["image_name"],parameters["dir"],print_create=False)
+                #self.Plot(orbit_form_test,"orbit_form",parameters["dir"],print_create=False)
+                #self.Plot(dist,"orbit",parameters["dir"],print_create=False)
+
+                #Binary map
+                frac_entire=binary_dilation((canny(conv)+sobel(conv*(-1))),iterations=2)
+
+        #self.file_name="fractal_array"
+        #parameters["dir"]=self.IM_DIR+"/fractal"
 
         # Save images
-        self.Plot(self.z,self.file_name,parameters["dir"],print_create=False)
-        self.Plot(conv,"convergence",parameters["dir"],print_create=False)
-        self.Plot(frac_entire,"edges",parameters["dir"],print_create=False)
+        #self.Plot(self.z,self.file_name,parameters["dir"],print_create=False)
+        #self.Plot(conv,"convergence",parameters["dir"],print_create=False)
+        #self.Plot(frac_entire,"edges",parameters["dir"],print_create=False)
+        #self.Plot(sobel(self.z),"sobel",parameters["dir"],print_create=False)
 
         print("Fractal_image...Done")
 
@@ -202,37 +212,152 @@ class IMAGE():
     ############RENDERING#################
     ### COLORS ###
 
+    ### SHADERS ###
+    def lighting(z, angle, elevation, ambient):
+        """
+        This function performs 3D lighting for the Slope family of fractals.
+        """
+        vz = -np.sqrt(1 - np.abs(z)**2)  # extract implied portion of normal
+        d2r = np.pi / 180  # degrees to radians conversion factor
+
+        # create vector for light direction
+        lx = np.cos((270 - angle) * d2r) * np.cos(elevation * d2r)
+        ly = np.sin((270 - angle) * d2r) * np.cos(elevation * d2r)
+        lz = -np.sin(elevation * d2r)
+
+        # compute cosine of angle between these vectors
+        # (this is the amount of lighting on the surface)
+        l = lx * np.real(z) + ly * np.imag(z) + lz * vz
+        if l < ambient:  # light is below the ambient level
+            l = ambient  # set it to the ambient level
+        if ambient < 0:  # the ambient level is negative
+            l = l + 1  # offset to prevent clipping at 0
+        index = l * 0.99  # reduce it just a bit to prevent the colors from wrapping
+
+        return index
+   
+    def blinn_phong(self,normal, light):
+        """ Blinn-Phong shading algorithm
+    
+        Brightess computed by Blinn-Phong shading algorithm, for one pixel,
+        given the normal and the light vectors
+
+        Args:
+        normal: complex number
+        light: (float, float, float)
+                light vector: angle azimuth [0-360], angle elevation [0-90],
+                opacity [0,1], k_ambiant, k_diffuse, k_spectral, shininess
+           
+        Returns:
+            float: Blinn-Phong brightness
+
+        from https://github.com/jlesuffleur/gpu_mandelbrot/blob/master/mandelbrot.py
+        """
+        ## Lambert normal shading (diffuse light)
+        normal=np.divide(normal, abs(normal), out=np.zeros_like(normal), where=normal!=0)    
+        
+        # theta: light azimuth; phi: light elevation
+        # light vector: [cos(theta)cos(phi), sin(theta)cos(phi), sin(phi)]
+        # normal vector: [normal.real, normal.imag, 1]
+        # Diffuse light = dot product(light, normal)
+        ldiff = (normal.real*np.cos(light[0])*np.cos(light[1]) +
+                normal.imag*np.sin(light[0])*np.cos(light[1]) +
+                1*np.sin(light[1]))
+        # Normalization
+        ldiff = ldiff/(1+1*np.sin(light[1]))
+        
+        ## Specular light: Blinn Phong shading
+        # Phi half: average between pi/2 and phi (viewer elevation)
+        # Specular light = dot product(phi_half, normal)
+        phi_half = (np.pi/2 + light[1])/2
+        lspec = (normal.real*np.cos(light[0])*np.sin(phi_half) +
+                normal.imag*np.sin(light[0])*np.sin(phi_half) +
+                1*np.cos(phi_half))
+        # Normalization
+        lspec = lspec/(1+1*np.cos(phi_half))
+        #spec_angle = max(0, spec_angle)
+        lspec = lspec ** light[6] # shininess
+        
+        ## Brightness = ambiant + diffuse + specular
+        bright = light[3] + light[4]*ldiff + light[5]*lspec
+        ## Add intensity
+        bright = bright * light[2] + (1-light[2])/2 
+        return bright
     ### FILTERS ###
-    def Local_treshold(self,array):
+    def local_treshold(self,array):
         """Local treshold filter"""
         return array>threshold_local(array)
+    
+    def forces(self,array,parameters):
+        """
+         This uses the Mosaic algorithm to sprinkle the image
+         with "force points" which attract or repel pixels in
+         the image. For any given pixel, its final location is
+         the sum of all the forces acting on it. You cannot place
+         force points manually; they are placed by the same
+         algorithm which places mosaic tile centers.
 
+        """
 
+    ### BLENDING ###
 
+    def luminosity_blend():
+        # assuming images are numpy arrays
+        pass
+    
+    def multiply_blend():
+        pass
 if __name__=='__main__':
-    parameters={
-    "frame_name":1,
-    "Animation":"Pulsing",
-    "Repetition":1,
-    "FPS":30 ,
-    "Duration":5, #seconds
-    "zoom":1.2,
-    "color_API_tuple":[[64,15,88],(15,5,0),(249,44,6),"N","N"],  #Example: [[r,g,b],"N","N","N","N"]
-    "cmap":"Greys",
-    "coord":np.array([[-1,1],[-1,1]]),
-    "degree": random.randint(5,20),
-    "rand_coef": False,
-    "coef": [1j,1,1j,1j,1j,0,0], #Must have value if rand_coef==False
-    "dpi": 1000,
-    "itermax":150,
-    # RFA
-}
+    import time
+    cmap_dict = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
+                  'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
+                  'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn',
+                  'spring', 'summer', 'autumn', 'winter', 'cool','Wistia',
+                  'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy', 'RdBu', 'RdYlBu']
+    
+    raster_image_list=["circle","circle2","fire","human","eyes","planet","stars"]
+    start_time=time.time()
+    i=20
+    for k in range(10):
+        new_time=time.time()
+        print("-----------------",i,"------------------")
 
-    try:
-        for i in range(1):
+
+        parameters={
+        "frame_name":1,
+        "Animation":"Pulsing",
+        "Repetition":1,
+        "FPS":30 ,
+        "Duration":5, #seconds
+        "zoom":1.2,
+
+        "cmap":np.random.choice(cmap_dict),
+        "dir": "image/fractal",
+        "image_name": f"image{i}",
+        "raster_image":np.random.choice(raster_image_list),
+        "dpi": 1000,
+
+        "coord":np.array([[-1,1],[-1,1]]),
+        "degree": random.randint(5,20),
+        "rand_coef": False,
+        "coef": [1j,1,1j,1j,1j,0,0], #Must have value if rand_coef==False
+        "itermax":150,
+
+        # RFA
+    }
+
+        try:
             obj=IMAGE(parameters)
             obj.Fractal_image(parameters)
-            print("\n\n")
+            print("raster image: ",parameters["raster_image"])
+            print("cmap: ",parameters["cmap"])
+            for j in range(10):
+                obj.cmap=np.random.choice(cmap_dict)
+                print(f"cmap{j}: ",obj.cmap)
+                obj.Plot(obj.shaded,parameters["image_name"]+f"_{j}",parameters["dir"],print_create=False)
 
-    except KeyboardInterrupt:
-        sys.exit()
+        except KeyboardInterrupt:
+            sys.exit()
+        print("\nseconds: " ,(time.time() - new_time))
+        i+=1
+    print("\n\n--- minutes ---" ,(time.time() - start_time)%60)

@@ -5,7 +5,7 @@ import numpy as np
 import random as rd
 import time
 from scipy.ndimage import gaussian_filter,sobel,binary_dilation,distance_transform_edt
-from skimage.filters import threshold_mean
+from skimage.filters import threshold_mean, butterworth
 from scipy.optimize import root_scalar
 import itertools as it
 
@@ -107,7 +107,7 @@ class Polynomials():
     def taylor_approximation(self,func,degree,interval):
         """Taylor approximation of function func"""
         if degree is None:
-            degree=5
+            degree=10
         if interval is None:
             interval=1
         
@@ -228,13 +228,44 @@ class RFA_fractal():
         real_dom=np.linspace(domain[0,0],domain[0,1],N,endpoint=False) #expanded domain
         complex_dom=np.linspace(domain[1,0],domain[1,1],N,endpoint=False)
         return np.array([(item+complex_dom*1j) for i,item in enumerate(real_dom)]).reshape(N,N).transpose() #array of shape (N,N)
+    
+    def get_distance(self ,z, distance_map,option = 4):
+        """
+        Get distance of all point in array to closest point of some shape (circle, rectangle, etc)
+        shape must be in distance space
+        """
 
-    def get_distance(self,array,shape):
-        """Get distance of all point in array to some shape (circle, rectangle, etc)"""
 
-        return abs(abs(array)-shape)**2
+        width, height = distance_map.shape
+        x, y = (width-1)/2*(np.clip(z.real,-1,1)+1), (height-1)/2*(np.clip(z.imag,-1,1)+1)
+        i, j = np.int64(x), np.int64(y)
+        
 
-    def Newton_method(self,array,func,dfunc,tol=1e-08,max_steps=100,damping=1,Orbit_trap=False,orbit_form=None,verbose=True):
+        if option==0:
+            distance = distance_map[i,j]*z
+        
+        elif option==1:
+            distance = distance_map[i,j] # bitmap
+            
+        elif option==2:
+            distance = distance_map[i,j]*(1-np.abs(x-i))*(1-np.abs(y-j)) #idk weird stuff
+
+        elif option==3:
+            distance = distance_map[i,j]*np.arctan(z)
+
+        elif option==4:
+            distance=distance_map[i,j]*np.sin(z.real)*np.cos(z.imag)/np.arctan(z) # small smoothing circle
+
+        elif option==5:
+            distance=distance_map[i,j]*1/np.sqrt(2*np.pi*distance_map[i,j]**2)*np.exp(-z**2/(2*distance_map[i,j]**2)) #gaussian
+
+        elif option==6:
+            distance= butterworth(distance_map[i,j]*z,highpass=True) #lowpass filter
+
+        return distance.flatten()
+
+
+    def Newton_method(self,array,func,dfunc,tol=1e-08,max_steps=100,damping=1,Orbit_trap=False,orbit_form=None,verbose=True,d2func=None):
         """
         Newton method for Nova Fractal
         
@@ -257,14 +288,17 @@ class RFA_fractal():
         activepoint=np.ones_like(z)  #used to stop points that attained required precision
         i=0 #count, used to calculate the fractal
         ziter=np.zeros_like(z)
+        dz=np.ones_like(z)
+
 
         if Orbit_trap:
             dist=1e20*np.ones_like(z)
             if orbit_form is None:
                 raise ValueError("No Orbit Form given")
-            orbit_form = distance_transform_edt(orbit_form) #distance transform of orbit form
-            plot(orbit_form, "images/fractal/orbit_form_2",cmap="gray",dpi=500)
-            orbit_form=orbit_form.flatten()/np.max(orbit_form) #normalizing
+            distance_map = distance_transform_edt(np.logical_not(orbit_form))# Compute the distance map
+            distance_map=np.divide(distance_map, abs(distance_map), out=np.zeros_like(distance_map), where=distance_map!=0)
+            orbit_form= orbit_form
+
 
 
         #Newton Method
@@ -282,18 +316,19 @@ class RFA_fractal():
             
             #Newton Method
             dx=-damping*func(z)/dfunc(z)
-            z[activeindex]=z[activeindex]+dx[activeindex]
+            z[activeindex]=z[activeindex]+dx[activeindex] #if nova add original array
+
             prec[activeindex]=abs(dx[activeindex])
-            i+=1
+            
             if verbose:
                 print("RFA-Newton method...",i,end="\r")
-            if Orbit_trap:
+            if Orbit_trap and i>1:
+                #normal
+                dz[activeindex]*= 2-dfunc(dist[activeindex])/d2func(dist[activeindex])
                 #method: distance from shape
-                dist=np.minimum(dist,self.get_distance(z,orbit_form))
-                np.where(prec<tol,0,dist)
-                #method: orbit in raster shape
-                #dist=get_color(z,orbit_form)
 
+                dist=np.minimum(dist,self.get_distance(z,distance_map))
+            i+=1
             
         #Assigning a value to points that haven't converged
         ziter[activepoint==True]=i #escape method coloring
@@ -302,10 +337,11 @@ class RFA_fractal():
         if verbose:
             print("RFA-Newton method...Done")
         if Orbit_trap:
-            z,ziter,dist=z.reshape(shape),ziter.reshape(shape),dist.reshape(shape)
-            return ziter,z,np.sqrt(dist)
+            normal=dist/dz
+            z,ziter,dist,normal=z.reshape(shape),ziter.reshape(shape),dist.reshape(shape),normal.reshape(shape)
+            return ziter,z,np.sqrt(dist),normal
         else:
-            z,ziter=z.reshape(shape),ziter.reshape(shape)
+            z,ziter =z.reshape(shape),ziter.reshape(shape)
             return ziter,z
 
     def Nova_Halley_method(self,array,func,dfunc,d2func,tol=1e-08,max_steps=100,damping=complex(0.5,0.5),c=0.15):
@@ -354,4 +390,22 @@ class RFA_fractal():
 
     #def Secant_method(self,tol=1.e-8,max_steps=100,damping_factor=complex(0.1,0.1),pixel=complex(0.1,0.1),verbose=True)):
 
+    def Orbit_trap(self,pre_o,traptype,trapshape,**kwargs):
+        """Orbit trap method for Fractal. Returns min between distance from orbit to orbit trap shape or distance from previous orbit
+        pre_o: previous orbit
 
+        traptype: method used to calculate orbit
+        options: "closest", "farthest", "sum","average","sign average","exponential average"
+
+        shape: shape of the orbit trap as a string. If "bitmap", the function will look for a image file with name kwargs filename
+        options: "bitmap","egg","ripple","perlin noise","fbm","Popcorn"
+
+        **kwargs: arguments (filename)
+        
+        """
+        def FBM(self,d):
+            """Fractional Brownian Motion"""
+
+        def Popcorn_pickover(self,d):
+            """Popcorn images"""
+    
