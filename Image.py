@@ -16,9 +16,10 @@ from skimage.feature import canny
 
 from RFA_fractals import RFA_fractal
 ### GLOBAL FONCTIONS ###
-def clean_dir(folder):
+def clean_dir(folder,verbose=False):
     import shutil
-    print("Cleaning directory '% s'..." %folder)
+    if verbose:
+        print("Cleaning directory '% s'..." %folder)
     for filename in os.listdir(folder):
         file_path = os.path.join(folder, filename)
         try:
@@ -30,23 +31,48 @@ def clean_dir(folder):
             print('Failed to delete %s. Reason: %s' % (file_path, e))
 
 class IMAGE():
-
-    def __init__(self,parameters) -> None:
+    ### SET PARAM^ ###
+    def __init__(self,param) -> None:
         print("Init Image class...",end="\r")
         ### Create folders
         self.APP_DIR = os.path.dirname(os.path.abspath(__file__))
-        self.IM_DIR=os.path.join(self.APP_DIR,"images")
-        self.FRAC_DIR=os.path.join(self.IM_DIR,"fractal")
+        self.IM_DIR=os.path.join(self.APP_DIR,param["dir"])
+
         try: os.mkdir(self.IM_DIR)
-        except: pass
-        try: os.mkdir(self.FRAC_DIR)
-        except: pass
+        except: pass#print(f"Could not create folder {self.IM_DIR}" )
 
         ### Set paramaters
-        self.dpi=parameters["dpi"]
-        self.cmap=parameters["cmap"]
+        self.set_image_parameters(param)
+        self.print=param["verbose"]
 
         print("Init Image class...Done")
+    
+    def set_image_parameters(self,param):
+        self.dpi=param["dpi"]
+        self.cmap=param["cmap"]
+        self.file_name=param["file_name"]
+        if param["clean_dir"]:
+            clean_dir(self.IM_DIR)
+        if param["shading"]:
+            self.lights=param["lights"]
+    
+    def set_fractal_parameters(self,param):
+        frac_param={}
+        frac_param["N"]=param["size"]
+        frac_param["domain"]=param["domain"]
+
+        frac_param["random"]=param["random"]
+        frac_param["func"]=param["func"]
+        frac_param["form"]=param["form"]
+        frac_param["degree"]=param["degree"]
+
+        frac_param["method"]=param["method"]
+
+        frac_param["tol"]=param["tol"]
+        frac_param["damping"]=param["damping"]
+        frac_param["itermax"]=param["itermax"]
+        frac_param["verbose"]=param["verbose"]
+        return frac_param
     
     ### PLOT ###
     def Plot(self,array,name,Dir,print_create=True):
@@ -66,26 +92,26 @@ class IMAGE():
         return None
     
     ### FRACTAL IMAGE ###
-    def Fractal_image(self, parameters):
+    def Fractal_image(self, param):
         print("Fractal_image...",end="\r")
 
-        parameters["dir"]=self.FRAC_DIR
-        frac_param={
-            "N":8000,
-            "domain":np.array([[-1,1],[-1,1]]),
+        ### Set param
+        frac_param=self.set_fractal_parameters(param)
 
-            "random":True,
-            "func":[1,-1/2+np.sqrt(3)/2*1j,-1/2-np.sqrt(3)/2*1j,1/2+np.sqrt(3)/2*1j,1/2-np.sqrt(3)/2*1j],
-            "form": "root",
+        if param["raster_image"]!="":
+            try:
+                orbit_form=np.array(PILIM.open(self.APP_DIR+"/orbit/"+param["raster_image"]+".png",).resize((frac_param["N"]+1,frac_param["N"]+1)).convert("L"),dtype=float)
+            
+            except:
+                print("Raster image",param["raster_image"],"not found. \nIf you do not want to use a raster image, set 'raster_image' parameters to ''.\n Else check the name of the image in the 'orbit' folder")
 
-            "method":"Newton",
+        ### General type of Fractal
+        if "RFA" in frac_param["method"]: #Root finding algorithm
+            frac_obj=RFA_fractal(frac_param)
+            frac_param["func"]=frac_obj.coefs
 
-        }
-
-        frac_obj=RFA_fractal(frac_param)
-        frac_param["func"]=frac_obj.coefs
-
-        if "Nova" in frac_param["method"]:
+        ## Subtype of Fractal - Method will be called in the loop
+        if "Nova" in frac_param["method"]: # NO VARIATION OF METHOD FOR SUBTYPES YET
             """
             M-set fractal like with c-mapping
 
@@ -111,7 +137,7 @@ class IMAGE():
 
             if "Newton" in frac_param["method"]:
 
-                self.z,conv,dist=frac_obj.Newton_method(d2roots, #z0
+                self.z,conv,dist,normal=frac_obj.Newton_method(d2roots, #z0
                                                         lambda z: np.array([frac_obj.poly.poly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f
                                                         lambda z: np.array([frac_obj.poly.dpoly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f'
                                                         tol=1.e-05,
@@ -128,114 +154,63 @@ class IMAGE():
 
     
         
+        ## No subtype specified
         else:
-            if "Newton" in frac_param["method"]: 
-                orbit_form_test=np.array(PILIM.open("images/orbit/"+parameters["raster_image"]+".png",).resize((frac_param["N"]+1,frac_param["N"]+1)).convert("L"),dtype=float)
-
+            #RFA fractal
+            if "Newton" in frac_param["method"]: #Newton method
                 self.z,conv,dist,normal=frac_obj.Newton_method(frac_obj.array,
                                                     lambda z: frac_obj.poly.poly(z,frac_obj.coefs),
                                                     lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),
-                                                    1.e-05,
-                                                    50,
-                                                    complex(1.01,-0.01),
-                                                    Orbit_trap=True,
-                                                    orbit_form=orbit_form_test,
-                                                    d2func=lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs))
-                
-                lights=(45., 0, 40., 0, 0.5, 1.2, 1)
-                normal=self.blinn_phong(normal,lights)
+                                                    lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs),
+                                                    frac_param["tol"],
+                                                    frac_param["itermax"],
+                                                    frac_param["damping"],
+                                                    orbit_form=orbit_form)
 
-                self.z,conv,dist=self.z.real,conv.real,dist.real
-                self.shaded=normal
-                #self.Plot(dist*self.z,"normal",parameters["dir"],print_create=False)
-                self.Plot(normal,parameters["image_name"],parameters["dir"],print_create=False)
-                #self.Plot(orbit_form_test,"orbit_form",parameters["dir"],print_create=False)
-                #self.Plot(dist,"orbit",parameters["dir"],print_create=False)
+            
+            elif "Halley" in frac_param["method"]:
+                self.z,conv,dist,normal=frac_obj.Halley_method(frac_obj.array,
+                                                    lambda z: frac_obj.poly.poly(z,frac_obj.coefs),
+                                                    lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),
+                                                    lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs),
+                                                    frac_param["tol"],
+                                                    frac_param["itermax"],
+                                                    frac_param["damping"],
+                                                    orbit_form=orbit_form)
 
-                #Binary map
-                frac_entire=binary_dilation((canny(conv)+sobel(conv*(-1))),iterations=2)
+            # Julia fractal
+            elif "Julia" in frac_param["method"]:
+                pass
+        
+        if param["shading"]:
+            normal=self.blinn_phong(normal,self.lights)
 
-        #self.file_name="fractal_array"
-        #parameters["dir"]=self.IM_DIR+"/fractal"
+        self.z,conv,dist=self.z.real,conv.real,dist.real
+        self.shaded=normal
+        #Plot
+        if param["shading"]:
+            self.Plot(normal,param["file_name"],param["dir"],print_create=param["verbose"])
+        
+        if param["experimental"]:
+            #frac_partial=binary_dilation((canny(conv)+sobel(conv*(-1))),iteratiopns=1)
+            frac_partial=np.where(self.z<(frac_param["itermax"]-40),0,self.z)
 
-        # Save images
-        #self.Plot(self.z,self.file_name,parameters["dir"],print_create=False)
-        #self.Plot(conv,"convergence",parameters["dir"],print_create=False)
-        #self.Plot(frac_entire,"edges",parameters["dir"],print_create=False)
-        #self.Plot(sobel(self.z),"sobel",parameters["dir"],print_create=False)
+            self.Plot(self.shaded,param["file_name"]+"_shader",param["dir"],print_create=param["verbose"])
+            self.Plot(frac_partial,param["file_name"]+"_nobckg",param["dir"],print_create=param["verbose"])
+            self.Plot(frac_partial*normal,param["file_name"]+"_shader_nobckg",param["dir"],print_create=param["verbose"])
+            self.Plot(self.z,param["file_name"]+"_iter",param["dir"],print_create=param["verbose"])
+            
+
+
 
         print("Fractal_image...Done")
 
-    def adaptive_antialiasing(self,parameters):
+    def adaptive_antialiasing(self,param):
         pass
-    ### IMAGE HANDLER ###
-    def crop(self,im_path):
-        image=PILIM.open(im_path)
-
-        imageBox = image.getbbox()
-        cropped = image.crop(imageBox)
-        cropped.save(im_path)
-
-    def paste_image(self,image_bg, image_element, x0, y0, x1, y1, rotate=0, h_flip=False):
-        """
-            image_bg: image in the background
-            image_element: image that will be added on top of image_bg
-            x0,y0,y1,x1: coordinates of the image_element on image_bg
-            rotate (0 if None): rotation of image_element
-            h_flip (False by default): horizontal flip of image_element
-        """
-        #Copy all images
-        image_bg_copy = image_bg.copy()
-        image_element_copy = image_element.copy()
-        image_element_copy=image_element_copy.resize((x1-x0,y1-y0))
-
-
-        #horizontal flip
-        if h_flip:
-            image_element_copy = image_element_copy.transpose(PILIM.FLIP_LEFT_RIGHT)
-
-        #do rotation
-        image_element_copy = image_element_copy.rotate(rotate, expand=True)
-
-        #get all chanel
-        _, _, _, alpha = image_element_copy.split()
-
-        # image_element_copy's width and height will change after rotation
-        w = image_element_copy.width
-        h = image_element_copy.height
-
-        #Final image
-        image_bg_copy.paste(image_element_copy, box=(x0, y0, x1, y1), mask=alpha)
-        return image_bg_copy
-
-
     ############RENDERING#################
     ### COLORS ###
 
     ### SHADERS ###
-    def lighting(z, angle, elevation, ambient):
-        """
-        This function performs 3D lighting for the Slope family of fractals.
-        """
-        vz = -np.sqrt(1 - np.abs(z)**2)  # extract implied portion of normal
-        d2r = np.pi / 180  # degrees to radians conversion factor
-
-        # create vector for light direction
-        lx = np.cos((270 - angle) * d2r) * np.cos(elevation * d2r)
-        ly = np.sin((270 - angle) * d2r) * np.cos(elevation * d2r)
-        lz = -np.sin(elevation * d2r)
-
-        # compute cosine of angle between these vectors
-        # (this is the amount of lighting on the surface)
-        l = lx * np.real(z) + ly * np.imag(z) + lz * vz
-        if l < ambient:  # light is below the ambient level
-            l = ambient  # set it to the ambient level
-        if ambient < 0:  # the ambient level is negative
-            l = l + 1  # offset to prevent clipping at 0
-        index = l * 0.99  # reduce it just a bit to prevent the colors from wrapping
-
-        return index
-   
     def blinn_phong(self,normal, light):
         """ Blinn-Phong shading algorithm
     
@@ -283,12 +258,13 @@ class IMAGE():
         ## Add intensity
         bright = bright * light[2] + (1-light[2])/2 
         return bright
+    
     ### FILTERS ###
     def local_treshold(self,array):
         """Local treshold filter"""
         return array>threshold_local(array)
     
-    def forces(self,array,parameters):
+    def forces(self,array,param):
         """
          This uses the Mosaic algorithm to sprinkle the image
          with "force points" which attract or repel pixels in
@@ -301,12 +277,52 @@ class IMAGE():
 
     ### BLENDING ###
 
-    def luminosity_blend():
-        # assuming images are numpy arrays
-        pass
-    
-    def multiply_blend():
-        pass
+    ### POST-IMAGE HANDLER ###
+    def crop(self,im_path):
+        image=PILIM.open(im_path)
+
+        imageBox = image.getbbox()
+        cropped = image.crop(imageBox)
+        cropped.save(im_path)
+
+    def paste_image(self,image_bg, image_element, x0, y0, x1, y1, rotate=0, h_flip=False):
+        """
+            image_bg: image in the background
+            image_element: image that will be added on top of image_bg
+            x0,y0,y1,x1: coordinates of the image_element on image_bg
+            rotate (0 if None): rotation of image_element
+            h_flip (False by default): horizontal flip of image_element
+        """
+        #Copy all images
+        image_bg_copy = image_bg.copy()
+        image_element_copy = image_element.copy()
+        image_element_copy=image_element_copy.resize((x1-x0,y1-y0))
+
+
+        #horizontal flip
+        if h_flip:
+            image_element_copy = image_element_copy.transpose(PILIM.FLIP_LEFT_RIGHT)
+
+        #do rotation
+        image_element_copy = image_element_copy.rotate(rotate, expand=True)
+
+        #get all chanel
+        _, _, _, alpha = image_element_copy.split()
+
+        # image_element_copy's width and height will change after rotation
+        w = image_element_copy.width
+        h = image_element_copy.height
+
+        #Final image
+        image_bg_copy.paste(image_element_copy, box=(x0, y0, x1, y1), mask=alpha)
+        return image_bg_copy
+
+
+
+
+
+
+
 if __name__=='__main__':
     import time
     cmap_dict = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
@@ -317,47 +333,75 @@ if __name__=='__main__':
     
     raster_image_list=["circle","circle2","fire","human","eyes","planet","stars"]
     start_time=time.time()
-    i=20
-    for k in range(10):
+
+    i=0
+    for k in range(1):
         new_time=time.time()
         print("-----------------",i,"------------------")
 
 
-        parameters={
-        "frame_name":1,
-        "Animation":"Pulsing",
-        "Repetition":1,
+        param={
+        #### General parameters
+        "clean_dir":False, #clean image dir before rendering
+        "verbose":False, #print stuff
+        "experimental":True, #for trying stuff and knowing where to put it
+
+        #### Animation parameters
+        "Anim method":"Pulsing", #Pulsing, Zoom, Translation
+        "frame_number":1,
+        "frame_size": 2160,
         "FPS":30 ,
         "Duration":5, #seconds
-        "zoom":1.2,
+        "zoom":1.2, #if animation method is zoom 
 
+        #### Image parameters
+        #General
         "cmap":np.random.choice(cmap_dict),
-        "dir": "image/fractal",
-        "image_name": f"image{i}",
-        "raster_image":np.random.choice(raster_image_list),
-        "dpi": 1000,
+        "dir": "images",
+        "file_name": f"image{i}",
+        "raster_image":np.random.choice(raster_image_list), # if None, raster image is np.zeros((size,size))
+        #Colors
 
-        "coord":np.array([[-1,1],[-1,1]]),
-        "degree": random.randint(5,20),
-        "rand_coef": False,
-        "coef": [1j,1,1j,1j,1j,0,0], #Must have value if rand_coef==False
-        "itermax":150,
+        #Shading
+        "shading":True,
+        "lights": (45., 0, 40., 0, 0.5, 1.2, 1),
+        #Filters
 
-        # RFA
+        #### Fractal parameters
+        "method": "RFA Newton",
+        "size": 1000,
+        "domain":np.array([[-1,1],[-1,1]]),
+        ## RFA paramters
+        "random":True,
+        # Polynomial parameters #Must have value if random==False
+        "degree": None, #random.randint(5,20),
+        "func": None,#[1,-1/2+np.sqrt(3)/2*1j,-1/2-np.sqrt(3)/2*1j,1/2+np.sqrt(3)/2*1j,1/2-np.sqrt(3)/2*1j], 
+        "form": "", #root, coefs, taylor_approx
+
+        "distance_calculation": 4, #see options of get_distance function in RFA_fractals.py
+        #Method parameters
+        "itermax":50,
+        "tol":1e-8,
+        "damping":complex(1.01,-.01),
+
+        ##Julia parameters
     }
 
+        param["dpi"]=param["size"]
         try:
-            obj=IMAGE(parameters)
-            obj.Fractal_image(parameters)
-            print("raster image: ",parameters["raster_image"])
-            print("cmap: ",parameters["cmap"])
-            for j in range(10):
-                obj.cmap=np.random.choice(cmap_dict)
-                print(f"cmap{j}: ",obj.cmap)
-                obj.Plot(obj.shaded,parameters["image_name"]+f"_{j}",parameters["dir"],print_create=False)
+            obj=IMAGE(param)
+            obj.Fractal_image(param)
+            print("raster image: ",param["raster_image"])
+            print("cmap: ",param["cmap"])
+
+            # Uncomment to plot 10 images with different cmap
+            #for j in range(10):
+            #    obj.cmap=np.random.choice(cmap_dict)
+            #    print(f"cmap{j}: ",obj.cmap)
+            #    obj.Plot(obj.shaded,param["image_name"]+f"_{j}",param["dir"],print_create=False)
 
         except KeyboardInterrupt:
             sys.exit()
-        print("\nseconds: " ,(time.time() - new_time))
+        #print("\nseconds: " ,(time.time() - new_time))
         i+=1
-    print("\n\n--- minutes ---" ,(time.time() - start_time)%60)
+    print("----------------- {}.{:02d} min -----------------".format(int((time.time() - start_time)//60), int((time.time() - start_time)%60)))

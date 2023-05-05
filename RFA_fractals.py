@@ -174,7 +174,6 @@ class RFA_fractal():
         self.__dict__.update(kwargs)
 
         self.array = self.init_array(config["N"],config["domain"])
-
         self.poly = Polynomials(func=config["func"],random_poly=config["random"],form=config["form"],**kwargs)
         self.coefs=self.poly.coefs
         #check if poly converges ok with sample of domain
@@ -188,19 +187,25 @@ class RFA_fractal():
                 z=self.init_array(100,config["domain"])
 
                 if "Newton" in config["method"]:
-                    up_treshold=0.50
-                    min_treshold=0.12
-                    z=self.Newton_method(z,lambda z: self.poly.poly(z,self.coefs),lambda z: self.poly.dpoly(z,self.coefs),tol=1.e-05,max_steps=50,verbose=False)
+                    up_treshold=0.6
+                    min_treshold=0.10
+                    z,u1,u2,u3=self.Newton_method(z,
+                                                  lambda z: self.poly.poly(z,self.coefs),
+                                                  lambda z: self.poly.dpoly(z,self.coefs),
+                                                  tol=1.e-05,
+                                                  max_steps=50,
+                                                  d2func= lambda z: self.poly.d2poly(z,self.coefs),
+                                                  verbose=False)
 
                 elif config["method"]=="Haley": #SAME FOR NOW
                     up_treshold=0.35
                     min_treshold=0.12
-                    z=self.Nova_Halley_method(z,lambda z: self.poly.poly(z,self.coefs),lambda z: self.poly.dpoly(z,self.coefs),tol=1.e-05,max_steps=50)
+                    z,u1,u2,u3=self.Nova_Halley_method(z,lambda z: self.poly.poly(z,self.coefs),lambda z: self.poly.dpoly(z,self.coefs),tol=1.e-05,max_steps=50)
 
                 elif config["method"]=="Secant": #SAME FOR NOW
                     up_treshold=0.35
                     min_treshold=0.12
-                    z=self.Nova_Secant_method(z,lambda z: self.poly.poly(z,self.coefs),lambda z: self.poly.dpoly(z,self.coefs),tol=1.e-05,max_steps=50)
+                    z,u1,u2,u3=self.Nova_Secant_method(z,lambda z: self.poly.poly(z,self.coefs),lambda z: self.poly.dpoly(z,self.coefs),tol=1.e-05,max_steps=50)
 
 
                 gen_area=z > threshold_mean(z)
@@ -212,8 +217,7 @@ class RFA_fractal():
                 else:
                     break
                 count+=1
-                if count>100:
-                    print("Could not find suitable polynomial. Try again.")
+                if count>25:
                     break
             print("Choose Polynomial...Done",end="\n\n")
 
@@ -264,8 +268,7 @@ class RFA_fractal():
 
         return distance.flatten()
 
-
-    def Newton_method(self,array,func,dfunc,tol=1e-08,max_steps=100,damping=1,Orbit_trap=False,orbit_form=None,verbose=True,d2func=None):
+    def Newton_method(self,array,func,dfunc,d2func,tol=1e-08,max_steps=100,damping=1,orbit_form=None,verbose=True):
         """
         Newton method for Nova Fractal
         
@@ -282,6 +285,8 @@ class RFA_fractal():
         if verbose:
             print("RFA-Newton method...",end="\r")
         #initialisation
+        if orbit_form is None:
+            orbit_form = np.ones_like(array,dtype=bool)
         shape=array.shape        
         z=array.copy().flatten() #such that f''(z)=0
         prec=np.ones_like(z) #precision
@@ -291,13 +296,10 @@ class RFA_fractal():
         dz=np.ones_like(z)
 
 
-        if Orbit_trap:
-            dist=1e20*np.ones_like(z)
-            if orbit_form is None:
-                raise ValueError("No Orbit Form given")
-            distance_map = distance_transform_edt(np.logical_not(orbit_form))# Compute the distance map
-            distance_map=np.divide(distance_map, abs(distance_map), out=np.zeros_like(distance_map), where=distance_map!=0)
-            orbit_form= orbit_form
+        dist=1e20*np.ones_like(z)
+        
+        distance_map = distance_transform_edt(np.logical_not(orbit_form))# Compute the distance map
+        distance_map=np.divide(distance_map, abs(distance_map), out=np.zeros_like(distance_map), where=distance_map!=0)
 
 
 
@@ -322,12 +324,13 @@ class RFA_fractal():
             
             if verbose:
                 print("RFA-Newton method...",i,end="\r")
-            if Orbit_trap and i>1:
-                #normal
-                dz[activeindex]*= 2-dfunc(dist[activeindex])/d2func(dist[activeindex])
-                #method: distance from shape
 
-                dist=np.minimum(dist,self.get_distance(z,distance_map))
+            #Orbit Trap
+            #normal
+            dz[activeindex]*= 2-dfunc(dist[activeindex])/d2func(dist[activeindex])
+            #method: distance from shape
+
+            dist=np.minimum(dist,self.get_distance(z,distance_map))
             i+=1
             
         #Assigning a value to points that haven't converged
@@ -336,27 +339,36 @@ class RFA_fractal():
         z=np.around(z,4)
         if verbose:
             print("RFA-Newton method...Done")
-        if Orbit_trap:
-            normal=dist/dz
-            z,ziter,dist,normal=z.reshape(shape),ziter.reshape(shape),dist.reshape(shape),normal.reshape(shape)
-            return ziter,z,np.sqrt(dist),normal
-        else:
-            z,ziter =z.reshape(shape),ziter.reshape(shape)
-            return ziter,z
+        normal=dist/dz
+        z,ziter,dist,normal=z.reshape(shape),ziter.reshape(shape),dist.reshape(shape),normal.reshape(shape)
+        return ziter,z,np.sqrt(dist),normal
 
-    def Nova_Halley_method(self,array,func,dfunc,d2func,tol=1e-08,max_steps=100,damping=complex(0.5,0.5),c=0.15):
+
+    def Halley_method(self,array,func,dfunc,d2func,tol=1e-08,max_steps=100,damping=1,orbit_form=None,verbose=True):
         """Halley method"""
 
-        print("RFA-Halley method...",end="\r")
+        if verbose:
+            print("RFA-Halley method...",end="\r")
         #initialisation
-        shape=array.shape
-        z=array.flatten()
-        
+        if orbit_form is None:
+            orbit_form = np.ones_like(array,dtype=bool)
+        shape=array.shape        
+        z=array.copy().flatten() #such that f''(z)=0
         prec=np.ones_like(z) #precision
         activepoint=np.ones_like(z)  #used to stop points that attained required precision
         i=0 #count, used to calculate the fractal
         ziter=np.zeros_like(z)
+        dz=np.ones_like(z)
 
+
+        dist=1e20*np.ones_like(z)
+        
+        distance_map = distance_transform_edt(np.logical_not(orbit_form))# Compute the distance map
+        distance_map=np.divide(distance_map, abs(distance_map), out=np.zeros_like(distance_map), where=distance_map!=0)
+
+
+
+        #Halley Main loop
         while i<=max_steps:
 
             #checking for points precision reaching tol 
@@ -369,20 +381,35 @@ class RFA_fractal():
 
             activeindex=activepoint.nonzero() #updating the active indexes
             
-            #Newton Method
+            #Halley Method
             dx=-damping*2*func(z)*dfunc(z)/(2*dfunc(z)**2-d2func(z)*func(z))
-            z[activeindex]=z[activeindex]+dx[activeindex]
-            prec[activeindex]=abs(dx[activeindex])
-            i+=1
-            print("RFA-Halley method...",i,end="\r")
-        #Assigning a value to points that haven't converged
-        ziter[activepoint==True]=i
-        z[activepoint==True]=0
-        z=np.around(z,4)
+            z[activeindex]=z[activeindex]+dx[activeindex] #if nova add original array
 
-        print("Done (RFA-Halley method) ")
-    
-        return ziter.reshape(shape),z.reshape(shape)
+            prec[activeindex]=abs(dx[activeindex])
+            
+            if verbose:
+                print("RFA-Halley method...",i,end="\r")
+
+            #Orbit Trap
+            #normal
+            dz[activeindex]*= 2-dfunc(dist[activeindex])/d2func(dist[activeindex])
+            #dz[activeindex]*=(2*dfunc(dist[activeindex])**2-2*d2func(dist[activeindex])*dfunc(dist[activeindex])+d2func(dist[activeindex])**2)/(2*dfunc(dist[activeindex])**2-d2func(dist[activeindex])*func(dist[activeindex]))**2
+            #method: distance from shape
+            dist=np.minimum(dist,self.get_distance(z,distance_map))
+
+            i+=1
+            
+        #Assigning a value to points that haven't converged
+        ziter[activepoint==True]=i #escape method coloring
+        z[activepoint==True]=0 #Root coloring
+        z=np.around(z,4)
+        if verbose:
+            print("RFA-Halley method...Done")
+        normal=dist/dz
+        z,ziter,dist,normal=z.reshape(shape),ziter.reshape(shape),dist.reshape(shape),normal.reshape(shape)
+        return ziter,z,np.sqrt(dist),normal
+        
+
 
     #def Nova_Secant_method(self,tol=1.e-8,max_steps=100,damping_factor=complex(0.1,0.1),pixel=complex(0.1,0.1)):
 
