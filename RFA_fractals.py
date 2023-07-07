@@ -2,10 +2,10 @@
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
-import random
-import time
-from skimage.filters import threshold_mean
-from scipy.optimize import root_scalar
+import random as rd
+from scipy.ndimage import distance_transform_edt
+from skimage.filters import threshold_mean, butterworth
+import itertools as it
 
 #plot handling
 def plot(array,name,cmap=LinearSegmentedColormap.from_list("lambdacmap",["black","white"],N=2),dpi=1000):
@@ -17,259 +17,387 @@ def plot(array,name,cmap=LinearSegmentedColormap.from_list("lambdacmap",["black"
     ax.imshow(array,cmap=cmap)
     fig.savefig(f"{name}.png",dpi=dpi)
 
+class Polynomials():
+    def __init__(self,func=[],random_poly=True,form="root",**kwargs):
+        """
+        func: list of roots or coefficients. If form=="taylor_approx", func is a function (ex. lambda z: sin(z))
+        random_poly: True or False (if True, func is ignored)
+        form: "root","coef","taylor_approx" (if random_poly==True, form is ignored)
+        """
+        self.__dict__.update(kwargs)
+
+
+        if random_poly==True:
+            self.coefs=self.choose_poly(self.__dict__.get("max_degree"))
+            self.roots=self.coefficients_to_roots(self.coefs)
+        
+        else: #random_poly==False
+            if func==[]:
+                raise ValueError("No function given")
+
+            if form=="root":
+                self.roots=func
+                self.coefs=self.roots_to_coefficients(self.roots)                
+
+            elif form=="taylor_approx":
+                self.coefs=self.taylor_approximation(func,degree=self.__dict__.get("degree"),interval=self.__dict__.get("interval"))
+                self.roots=self.coefficients_to_roots(self.coefs)
+            else: #form=="coef" or form==None
+                #coefs by default
+                self.coefs=func
+                self.roots=self.coefficients_to_roots(self.coefs)
+        
+        
+
+        ### POLYNOMIALS ###
+    # Code taken from https://github.com/3b1b/videos/blob/master/_2022/quintic/roots_and_coefs.py
+
+    def roots_to_coefficients(self,roots):
+        """Convert roots form poly to coefficients form poly"""
+        n = len(list(roots))
+        return [
+            ((-1)**(n - k)) * sum(
+                np.prod(tup)
+                for tup in it.combinations(roots, n - k)
+            )
+            for k in range(n)
+        ] + [1]
+
+    def poly(self,z, coefs):
+        """Evaluate polynomial at z with coefficients coefs"""
+        return sum(coefs[k] * z**k for k in range(len(coefs)))
+
+
+    def dpoly(self,z, coefs):
+        """Derivative of poly(z, coefs)"""
+        return sum(k * coefs[k] * z**(k - 1) for k in range(1, len(coefs)))
+
+    def d2poly(self,z,coefs):
+        """Second derivative of poly(z, coefs)"""
+        return sum(k*(k-1)*coefs[k]*z**(k-2) for k in range(2,len(coefs)))
+
+    def find_root(self,func, dfunc, seed=complex(1, 1), tol=1e-8, max_steps=100):
+        # Use newton's method
+        last_seed = np.inf
+        for n in range(max_steps):
+            if abs(seed - last_seed) < tol:
+                break
+            last_seed = seed
+            seed = seed - func(seed) / dfunc(seed)
+        return seed
+
+    def coefficients_to_roots(self,coefs):
+        """Find roots of polynomial with coefficients coefs"""
+        if len(coefs) == 0:
+            return []
+        elif coefs[-1] == 0:
+            return self.coefficients_to_roots(coefs[:-1])
+        roots = []
+        # Find a root, divide out by (z - root), repeat
+        for i in range(len(coefs) - 1):
+            root = self.find_root(
+                lambda z: self.poly(z, coefs),
+                lambda z: self.dpoly(z, coefs),
+            )
+            roots.append(root)
+            new_reversed_coefs, rem = np.polydiv(coefs[::-1], [1, -root])
+            coefs = new_reversed_coefs[::-1]
+        return roots
+
+    def taylor_approximation(self,func,degree,interval):
+        """Taylor approximation of function func"""
+        if degree is None:
+            degree=10
+        if interval is None:
+            interval=1
+        
+        from scipy.interpolate import approximate_taylor_polynomial
+
+        return approximate_taylor_polynomial(func,0,degree,interval).c
+
+    def choose_poly(self,max_degree):
+        """Choose random polynomial"""
+        if max_degree is None:
+            max_degree=8
+        elif max_degree<4:
+            print("max_degree must be >=4. Setting to 8")
+            max_degree=8
+        
+        degree=rd.randint(4,max_degree)
+        coefs=[complex(rd.uniform(-10,10),rd.uniform(-10,10)) for i in range(degree)]
+        return coefs
+
+    def add_c_to_coefs(self,c,func,random=True,c_expression=None):
+        """Add c to coefficients of polynomial
+            if random is False, c_expression must be list like lambda c: op(coefs,expression of c)
+        
+        """
+        print("Adding c to coefficients",end="\r")
+        c_coefs=np.zeros((len(c),len(func)),dtype=complex)
+        if random==True:
+            from operator import add, sub
+            ops = (add, sub)
+            op = np.random.choice(ops, p=[0.5, 0.5],size=len(func))
+
+            randint=np.random.uniform(0,1,size=len(func))
+
+            mask=np.random.choice([0,1],p=[0.7,0.3],size=len(func)) #mask for 0 or 1
+            if np.all(mask==0):
+                mask[0]=1;mask[-1]=1
+            
+            for i,point in enumerate(c):
+                    for n in range(len(func)):
+                        #debug
+                        if i==10 and mask[n]:
+                            print(f"coef of z^{n}",np.around(func[n],2),"*",op[n].__name__,"(c,",np.around(randint[n],2),")")
+                        elif i==10 and ~mask[n]:
+                            print(f"coef of z^{n}",np.around(func[n],2))
+                        #end debug
+
+                        c_coefs[i,n]=op[n](point,randint[n])*func[n]*mask[n]+func[n]*(~mask[n]) 
+
+        elif random==False:
+            if c_expression is None or c_expression==[]:
+                raise ValueError("No c_expression given")
+            for i,point in enumerate(c):
+                c_coefs[i]=c_expression(point)*np.array(func)
+        
+        print("Adding c to coefficients...Done")
+        return c_coefs
+
 class RFA_fractal():
 
-    def __init__(self,parameters) -> None:
-            print("Init Root-Finding-Algorithm (RFA-init) fractals...")
-            ### EXTRACT PARAMETERS
-            #polynomial coefficients
-            self.degree=parameters["degree"] #degree of polynomial
-            self.coord=parameters["coord"] #coordinates of computed complex plane
-            self.size=parameters["dpi"] #Size of array
-            self.array=self.init_array(self.size,parameters["coord"]).reshape(self.size,self.size) #array of complex numbers
+    def __init__(self, config, **kwargs):
+        print("Initializing RFA fractal...",end="\r")
+        
+        self.config = config
+        self.__dict__.update(kwargs)
 
-            if parameters["rand_coef"]==True:
-                self.choose_polynomial(self.degree,self.coord)
-            else: self.coef=parameters["coef"]    
-            print("Done RFA-Init")
-    
-    ## ARRAY
+        self.array = self.init_array(config["N"],config["domain"])
+        self.poly = Polynomials(func=config["func"],random_poly=config["random"],form=config["form"],**kwargs)
+        self.coefs=self.poly.coefs        
+        #check if poly converges ok with sample of domain
+        if config["random"]==True:
+            count=0
+
+            up_treshold=0
+            min_treshold=0
+            while True:
+                print("Choose Polynomial...",end="\r")
+                z=self.init_array(100,config["domain"])
+
+
+                up_treshold=0.6
+                min_treshold=0.10
+                z,u1,u2,u3=self.Newton_method(z,
+                                                lambda z: self.poly.poly(z,self.coefs),
+                                                lambda z: self.poly.dpoly(z,self.coefs),
+                                                tol=1.e-05,
+                                                max_steps=50,
+                                                d2func= lambda z: self.poly.d2poly(z,self.coefs),
+                                                verbose=False)
+
+                gen_area=z > threshold_mean(z)
+
+                if np.mean(gen_area)>up_treshold:
+                    pass
+                elif np.mean(gen_area)<min_treshold:
+                    pass     
+                else:
+                    break
+                count+=1
+                if count>25:
+                    break
+            print("Choose Polynomial...Done",end="\n\n")
+
+            print("Gen_area",np.mean(gen_area))
+            print("Chosen roots:",np.around(self.poly.roots,2))
+            print("\n")
+
+            print("Initializing RFA fractal...Done")
+
     def init_array(self,N,domain):
         """create array of complex numbers"""
         real_dom=np.linspace(domain[0,0],domain[0,1],N,endpoint=False) #expanded domain
         complex_dom=np.linspace(domain[1,0],domain[1,1],N,endpoint=False)
         return np.array([(item+complex_dom*1j) for i,item in enumerate(real_dom)]).reshape(N,N).transpose() #array of shape (N,N)
-
-    ## POLYNOMIAL
-    def Horner_method(self,x, a):
-        result = 0
-        for i in range(len(a)-1, -1, -1):
-            result = a[i] + (x * result)
-        return result
     
-    def rand_coeffs(self,degree,a,b):
-        """chooses coefficients for a polynomial of the given degree, such that f(a) == b"""
-        coefficients = [0] + [random.randint(1, 10) for _ in range(degree-1)]
-        y = sum(coefficient * a**n for n, coefficient in enumerate(coefficients))
-        coefficients[0] = np.clip(b - y,-10000,10000)
+    def get_distance(self ,z, distance_map,option = 4):
+        """
+        Get distance of all point in array to closest point of some shape (circle, rectangle, etc)
+        shape must be in distance space
+        """
+
+
+        width, height = distance_map.shape
+        x, y = (width-1)/2*(np.clip(z.real,-1,1)+1), (height-1)/2*(np.clip(z.imag,-1,1)+1)
+        i, j = np.int64(x), np.int64(y)
         
-        return coefficients
 
-    def polynomial_compute(self,x,fp=False,fp2=False):
-        """Return the value of a polynomial and its derivatives with determined coefficients at value x"""    
-        #Value of the polynomial
-        coefficients=self.coef
-        f=self.Horner_method(x,coefficients)
+        if option==0:
+            distance = distance_map[i,j]*z
         
-        #Value of its first derivative
-
-        coefficients_prime=[coefficients[i] * i for i in range(1, len(coefficients))]
-        f_prime=self.Horner_method(x,coefficients_prime)                
-
-
-        #Value of its second derivative
-
-        coefficients_prime_second=[coefficients[i] * i for i in range(1, len(coefficients_prime))]
-        f_prime_second=self.Horner_method(x,coefficients_prime_second)
-
-
-        return f,f_prime,f_prime_second
-    
-    def choose_polynomial(self,degree,coord):
-        print("Choosing polynomial..(RFA-choose_polynomial)")
-        again=True
-        while again:
-            n=200 #small array 
-
-            z=self.init_array(n,coord).reshape(n,n)
-            self.coef =self.rand_coeffs(degree,random.randint(-2,2),random.randint(-2,2))
+        elif option==1:
+            distance = distance_map[i,j] # bitmap
             
-            itermax=150
-            epsilon=1.e-06
-            #initialisation
-            prec=np.ones_like(z) #precision
-            activepoint=np.ones_like(z)  #used to stop points that attained required precision
-            dx=np.zeros_like(z) #step
-            i=0 #count, used to calculate the fractal
+        elif option==2:
+            distance = distance_map[i,j]*(1-np.abs(x-i))*(1-np.abs(y-j)) #idk weird stuff
 
-            while np.any(activepoint==True) and i<=itermax:
+        elif option==3:
+            distance = distance_map[i,j]*np.arctan(z)
 
-                #checking for points precision reaching epsilon 
-                e=np.where(prec<epsilon) #checking which points converged
-                activepoint[e]=0 #taking out those points 
-                z[e]=i #noting the count value of those points
-                prec[e]=100 #taking out the precision at those points
-                activeindex=activepoint.nonzero() #updating the active indexes
-                
-                #Newton Method
-                fonction=self.polynomial_compute(z,fp=True) #f, fprime
-                dx=-fonction[0]/fonction[1]
-                z[activeindex]=z[activeindex]+dx[activeindex]
-                prec[activeindex]=abs(dx[activeindex])
-                i+=1
-            #Assigning a value to points that haven't converged
-            z[activepoint==True]=i
+        elif option==4:
+            distance=distance_map[i,j]*np.sin(z.real)*np.cos(z.imag)/np.arctan(z) # small smoothing 
 
-            gen_area=z > threshold_mean(z)
+        elif option==5:
+            distance=distance_map[i,j]*1/np.sqrt(2*np.pi*distance_map[i,j]**2)*np.exp(-z**2/(2*distance_map[i,j]**2)) #gaussian
 
-            if np.mean(gen_area)>0.35:
-                again=True
-            elif np.mean(gen_area)<0.12:
-                again=True       
-            else:
-                again=False
+        elif option==6:
+            distance= butterworth(distance_map[i,j]*z) #lowpass filter
+
+        return distance.flatten()
+
+    def Newton_method(self,array,func,dfunc,d2func,tol=1e-08,max_steps=100,damping=1,orbit_form=None,verbose=True):
+        """
+        Newton method for Nova Fractal
         
-        self.z=z
-        print("Done (RFA-choose_polynomial)")
-        return self.coef
-    
-    def taylor_approx(self,func):
-        """return taylor appoximation of a function"""
-    
-    
-    ## ROOT FINDING ALGORITHMS
-    def Newton_method_2(self,epsilon=1.e-10,itermax=300):
-        """Newton method"""
-        print("RFA-Newton method (scipy)...")
+        array: array of complex numbers, such that f''(z)=0
+        func: poly function to be iterated
+        dfunc: derivative of poly function
+        tol: scalar,tolerance for convergence
+        max_steps: scalar,maximum number of iterations
+        damping: complex number,damping factor
+        Orbit_trap: boolean, if True, add a filter to check if point is in orbit
+        orbit_form: binary mask of shape (N,N).
+        verbose: boolean, if True, print progress
+        """
+        if verbose:
+            print("RFA-Newton method...",end="\r")
         #initialisation
-        flat=self.array.flatten()
-        #np.savetxt("flat.txt",flat)
-
-        Root_obj=np.vectorize(root_scalar)
-        R=Root_obj(self.polynomial_compute,method='newton',x0=flat,fprime=True, fprime2=True, xtol=epsilon, maxiter=itermax)
-        np.savetxt("ro.txt",R)
-        iter_count_arr=Root_obj.iterations.reshape(self.array.shape)
-        pts_conv=Root_obj.root.reshape(self.array.shape)
-
-        self.z=iter_count_arr
-
-        print("Done (RFA-Newton method)")
-        return iter_count_arr,pts_conv
-
-    def Newton_method(self,epsilon=1.e-5,itermax=100):
-        """Newton method"""
-        print("RFA-Newton method...")
-        #initialisation
-        prec=np.ones_like(self.array) #precision
-        activepoint=np.ones_like(self.array)  #used to stop points that attained required precision
-        dx=np.zeros_like(self.array) #step
+        if orbit_form is None:
+            orbit_form = np.ones_like(array,dtype=bool)
+        shape=array.shape        
+        z=array.copy().flatten() #such that f''(z)=0
+        prec=np.ones_like(z) #precision
+        activepoint=np.ones_like(z)  #used to stop points that attained required precision
         i=0 #count, used to calculate the fractal
-        z=self.array.copy()
-        ziter=np.empty_like(self.array)
+        ziter=np.zeros_like(z)
+        dz=np.ones_like(z)
 
-        while np.any(activepoint==True) and i<=itermax:
 
-            #checking for points precision reaching epsilon 
-            e=np.where(prec<epsilon) #checking which points converged
+        dist=1e20*np.ones_like(z)
+        
+        distance_map = distance_transform_edt(np.logical_not(orbit_form))# Compute the distance map
+        distance_map=np.divide(distance_map, abs(distance_map), out=np.zeros_like(distance_map), where=distance_map!=0)
+
+
+
+        #Newton Method
+        while i<=max_steps:
+
+            #checking for points precision reaching tol 
+            e=np.where(prec<tol) #checking which points converged
             activepoint[e]=0 #taking out those points 
 
             ziter[e]=i #noting the count value of those points
 
             prec[e]=100 #taking out the precision at those points
+
             activeindex=activepoint.nonzero() #updating the active indexes
             
             #Newton Method
-            fonction=self.polynomial_compute(z,fp=True) #f, fprime
-            dx=-fonction[0]/fonction[1]
-            z[activeindex]=z[activeindex]+dx[activeindex]
+            dx=-damping*func(z)/dfunc(z)
+            z[activeindex]=z[activeindex]+dx[activeindex] #if nova add original array
+
             prec[activeindex]=abs(dx[activeindex])
-            i+=1
-            print(i,end="\r")
-        #Assigning a value to points that haven't converged
-        ziter[activepoint==True]=i
-        z[activepoint==True]=0
+            
+            if verbose:
+                print("RFA-Newton method...",i,end="\r")
 
-        self.z=ziter
+            #Orbit Trap
+            #normal
+            dz[activeindex]*= 2-dfunc(dist[activeindex])/d2func(dist[activeindex])
+            #method: distance from shape
+
+            dist=np.minimum(dist,self.get_distance(z,distance_map))
+            i+=1
+            
+        #Assigning a value to points that haven't converged
+        ziter[activepoint==True]=i #escape method coloring
+        z[activepoint==True]=0 #Root coloring
         z=np.around(z,4)
+        if verbose:
+            print("RFA-Newton method...Done")
+        normal=dist/dz
+        z,ziter,dist,normal=z.reshape(shape),ziter.reshape(shape),dist.reshape(shape),normal.reshape(shape)
+        return ziter,z,np.sqrt(dist),normal
 
-        print("Done (RFA-Newton method)")
-        return ziter,z
-    
-    def Global_Newton_method(self,epsilon=1.e-16,itermax=100):
-        """Global Newton method with damping factor a-> a/2"""
-        print("RFA-Global Newton method")
+
+    def Halley_method(self,array,func,dfunc,d2func,tol=1e-08,max_steps=100,damping=1,orbit_form=None,verbose=True):
+        """Halley method"""
+
+        if verbose:
+            print("RFA-Halley method...",end="\r")
         #initialisation
-        prec=np.ones_like(self.array) #precision
-        activepoint=np.ones_like(self.array)  #used to stop points that attained required precision
-        dx=np.zeros_like(self.array) #step
+        if orbit_form is None:
+            orbit_form = np.ones_like(array,dtype=bool)
+        shape=array.shape        
+        z=array.copy().flatten() #such that f''(z)=0
+        prec=np.ones_like(z) #precision
+        activepoint=np.ones_like(z)  #used to stop points that attained required precision
         i=0 #count, used to calculate the fractal
-        z=self.array.copy()
+        ziter=np.zeros_like(z)
+        dz=np.ones_like(z)
 
-        a=1 #damping factor
 
-        while np.any(activepoint==True) and i<=itermax:
+        dist=1e20*np.ones_like(z)
+        
+        distance_map = distance_transform_edt(np.logical_not(orbit_form))# Compute the distance map
+        distance_map=np.divide(distance_map, abs(distance_map), out=np.zeros_like(distance_map), where=distance_map!=0)
 
-            #checking for points precision reaching epsilon 
-            e=np.where(prec<epsilon) #checking which points converged
+
+
+        #Halley Main loop
+        while i<=max_steps:
+
+            #checking for points precision reaching tol 
+            e=np.where(prec<tol) #checking which points converged
             activepoint[e]=0 #taking out those points 
-            z[e]=i #noting the count value of those points
+
+            ziter[e]=i #noting the count value of those points
+
             prec[e]=100 #taking out the precision at those points
+
             activeindex=activepoint.nonzero() #updating the active indexes
             
-            #Newton Method
-            fonction=self.polynomial_compute(z) #f, fprime
-            dx=- fonction[0]/fonction[1]
-
-            #correct damping factor
-            Correction=abs(self.polynomial_compute(z[activeindex]+a*dx[activeindex],self.coef)[0])<abs(self.polynomial_compute(z[activeindex],self.coef)[0])
-            while np.any(Correction):
-                Correction=abs(self.polynomial_compute(z[activeindex]+a*dx[activeindex],self.coef)[0])<abs(self.polynomial_compute(z[activeindex],self.coef)[0])
-                a/=2
-            
-            z[activeindex]=z[activeindex]+a*dx[activeindex]
-            prec[activeindex]=abs(a*dx[activeindex])
-            i+=1
-        #Assigning a value to points that haven't converged
-        z[activepoint==True]=i
-
-        self.z=z
-        print("Done (RFA-Gloabal Newton method)")
-        return z
-
-    def Halley_method(self,epsilon=1.e-16,itermax=100):
-        """Global Newton method with damping factor a-> a/2"""
-        print("RFA-Halley method")
-        #initialisation
-        prec=np.ones_like(self.array) #precision
-        activepoint=np.ones_like(self.array)  #used to stop points that attained required precision
-        dx=np.zeros_like(self.array) #step
-        i=0 #count, used to calculate the fractal
-        z=self.array.copy()
-
-        a=1+1/2j #damping factor
-
-        while np.any(activepoint==True) and i<=itermax:
-
-            #checking for points precision reaching epsilon 
-            e=np.where(prec<epsilon) #checking which points converged
-            activepoint[e]=0 #taking out those points 
-            z[e]=i #noting the count value of those points
-            prec[e]=100 #taking out the precision at those points
-            activeindex=activepoint.nonzero() #updating the active indexes
-            
-            fonction=self.polynomial_compute(z,fp=True,fp2=True) #f, f', f''
-
             #Halley Method
-            dx=- 2*fonction[0]*fonction[1]/(2*fonction[1]**2-fonction[2]*fonction[0])
+            dx=-damping*2*func(z)*dfunc(z)/(2*dfunc(z)**2-d2func(z)*func(z))
+            z[activeindex]=z[activeindex]+dx[activeindex] #if nova add original array
 
-            z[activeindex]=z[activeindex]+a*dx[activeindex]
-            prec[activeindex]=abs(a*dx[activeindex])
+            prec[activeindex]=abs(dx[activeindex])
+            
+            if verbose:
+                print("RFA-Halley method...",i,end="\r")
+
+            #Orbit Trap
+            #normal
+            dz[activeindex]*= 2-dfunc(dist[activeindex])/d2func(dist[activeindex])
+            #dz[activeindex]*=(2*dfunc(dist[activeindex])**2-2*d2func(dist[activeindex])*dfunc(dist[activeindex])+d2func(dist[activeindex])**2)/(2*dfunc(dist[activeindex])**2-d2func(dist[activeindex])*func(dist[activeindex]))**2
+            #method: distance from shape
+            dist=np.minimum(dist,self.get_distance(z,distance_map))
+
             i+=1
+            
         #Assigning a value to points that haven't converged
-        z[activepoint==True]=i
+        ziter[activepoint==True]=i #escape method coloring
+        z[activepoint==True]=0 #Root coloring
+        z=np.around(z,4)
+        if verbose:
+            print("RFA-Halley method...Done")
+        normal=dist/dz
+        z,ziter,dist,normal=z.reshape(shape),ziter.reshape(shape),dist.reshape(shape),normal.reshape(shape)
+        return ziter,z,np.sqrt(dist),normal
+        
 
-        self.z=z
 
-        print("Done (RFA-Halley method)")
-        return z     
-
-    def Secant_method(self,epsilon=1.e-16,itermax=100):
-        """Secant method"""
-        print("RFA-Secant method")
-
-    def Bairstow_method(self,epsilon=1.e-16,itermax=100):
-        """Bairstow method"""
-        print("RFA-Bairstow method")
-
-class RFA_fractal_multivar():
-    pass
+    #def Secant_method(self,tol=1.e-8,max_steps=100,damping_factor=complex(0.1,0.1),pixel=complex(0.1,0.1),verbose=True)):

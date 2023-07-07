@@ -1,7 +1,6 @@
 import os
 import sys
 
-import random
 import numpy as np
 
 import matplotlib
@@ -11,14 +10,16 @@ import matplotlib.colors as colors
 from PIL import Image as PILIM
 
 from scipy.ndimage import gaussian_filter,sobel,binary_dilation
-from skimage.filters import threshold_otsu,threshold_local
+from skimage.filters import threshold_local
 from skimage.feature import canny
 
 from RFA_fractals import RFA_fractal
+
 ### GLOBAL FONCTIONS ###
-def clean_dir(folder):
+def clean_dir(folder,verbose=False):
     import shutil
-    print("Cleaning directory '% s'..." %folder)
+    if verbose:
+        print("Cleaning directory '% s'..." %folder)
     for filename in os.listdir(folder):
         file_path = os.path.join(folder, filename)
         try:
@@ -30,20 +31,50 @@ def clean_dir(folder):
             print('Failed to delete %s. Reason: %s' % (file_path, e))
 
 class IMAGE():
-
-    def __init__(self,parameters) -> None:
-        print("Init Image class (IM-Init)...")
+    ### SET PARAM^ ###
+    def __init__(self,param) -> None:
+        print("Init Image class...",end="\r")
         ### Create folders
         self.APP_DIR = os.path.dirname(os.path.abspath(__file__))
-        self.IM_DIR=os.path.join(self.APP_DIR,"images")
+        self.IM_DIR=os.path.join(self.APP_DIR,param["dir"])
+
         try: os.mkdir(self.IM_DIR)
-        except: pass
+        except: pass#print(f"Could not create folder {self.IM_DIR}" )
 
         ### Set paramaters
-        self.dpi=parameters["dpi"]
-        self.cmap=parameters["cmap"]
+        self.set_image_parameters(param)
+        self.print=param["verbose"]
 
-        print("Done (IM-Init)")
+        print("Init Image class...Done")
+    
+    def set_image_parameters(self,param):
+        self.dpi=param["dpi"]
+        self.file_name=param["file_name"]
+        if param["clean_dir"]:
+            clean_dir(self.IM_DIR)
+        if param["shading"]:
+            self.lights=param["lights"]
+        
+        self.cmap=self.cmap_from_list(param["color_list"])
+    
+    def set_fractal_parameters(self,param):
+        frac_param={}
+        frac_param["N"]=param["size"]
+        frac_param["domain"]=param["domain"]
+
+        frac_param["random"]=param["random"]
+        frac_param["func"]=param["func"]
+        frac_param["form"]=param["form"]
+        frac_param["degree"]=param["degree"]
+
+        frac_param["method"]=param["method"]
+
+        frac_param["tol"]=param["tol"]
+        frac_param["damping"]=param["damping"]
+        frac_param["itermax"]=param["itermax"]
+        frac_param["verbose"]=param["verbose"]
+
+        return frac_param
     
     ### PLOT ###
     def Plot(self,array,name,Dir,print_create=True):
@@ -62,51 +93,251 @@ class IMAGE():
         plt.close(fig)
         return None
     
-    def Fractal_image(self, parameters):
-        print("Fractal_image (IM-Fim)...")
+    ### FRACTAL IMAGE ###
+    def Fractal_image(self, param):
+        print("Fractal_image...",end="\r")
 
-        try: os.mkdir(self.FRAC_DIR)
-        except: pass
+        ### Set param
+        frac_param=self.set_fractal_parameters(param)
 
-        frac_param={"degree":parameters["degree"],
-                    "coord":parameters["coord"],
-                    "dpi":parameters["dpi"],
-                    "rand_coef":parameters["rand_coef"],
-                    "coef":parameters["coef"]}
+        if param["raster_image"]!="":
+            try:
+                orbit_form=np.array(PILIM.open(self.APP_DIR+"/orbit/"+param["raster_image"]+".png",).resize((frac_param["N"]+1,frac_param["N"]+1)).convert("L"),dtype=float)
+            
+            except:
+                print("Raster image",param["raster_image"],"not found. \nIf you do not want to use a raster image, set 'raster_image' parameters to ''.\n Else check the name of the image in the 'orbit' folder")
 
-        frac_obj=RFA_fractal(frac_param)
+        ### General type of Fractal
+        if "RFA" in frac_param["method"]: #Root finding algorithm
+            frac_obj=RFA_fractal(frac_param)
+            frac_param["func"]=frac_obj.coefs
+            self.func=frac_obj.coefs
 
-        self.z,conv=frac_obj.Newton_method()
 
-        self.z,conv=self.z.real,conv.real
-        self.z=abs(self.z-np.max(self.z))
+        ## Subtype of Fractal - Method will be called in the loop
+        if "Nova" in frac_param["method"]: # NO VARIATION OF METHOD FOR SUBTYPES YET
+            """
+            M-set fractal like with c-mapping
 
-        self.file_name="fractal_array"
-        self.Plot(self.z,self.file_name,parameters["dir"])
-        self.Plot(conv,"convergence",parameters["dir"])
+            Results are...experimental, and i cant be bothered to fix it
+            Use with caution
+            """
+            c=frac_obj.array #corresponding pixel to complex plane
+            shape=c.shape;c=c.flatten()
 
-        print("Done (IM-Fim)")
+            c_coefs=frac_obj.poly.add_c_to_coefs(c,frac_param["func"],frac_param["random"],c_expression=lambda c: np.array([1,(c-1),c-1,1,1,1]))
 
-        return conv
+            #assuming that the c-length is on axis 0
+            print("Computing roots...",end="\r")
+            d2roots=np.empty(c_coefs.shape[0],dtype=complex)
+            for i in range(c_coefs.shape[0]):
+                d2coefs=np.array([],dtype=complex)
+                for k in range(2,len(c_coefs[i])):
+                    d2coefs=np.append(d2coefs,k*(k-1)*c_coefs[i,k])
+                d2roots[i]=np.roots(d2coefs)[0]
+            print("Computing roots...Done")
 
-    def Image_maker(self,parameters):
-        parameters["dir"]=self.IM_DIR+"/fractal"
-        conv=self.Fractal_image(parameters)
+        #print(d2roots.shape,c.shape) #should be equal
+
+            if "Newton" in frac_param["method"]:
+
+                self.z,conv,dist,normal=frac_obj.Newton_method(d2roots, #z0
+                                                        lambda z: np.array([frac_obj.poly.poly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f
+                                                        lambda z: np.array([frac_obj.poly.dpoly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f'
+                                                        tol=1.e-05,
+                                                        max_steps=50,
+                                                        damping=complex(1,0.2))
+
+
+                self.z,conv,dist=self.z.reshape(shape),conv.reshape(shape),dist.reshape(shape)
+
+                self.z,conv,dist=self.z.real,conv.real,dist.real
+
+                #Binary map
+                frac_entire=binary_dilation(canny(conv),iterations=2)    
+
+    
+        
+        ## No subtype specified
+        else:
+            #RFA fractal
+            if "Newton" in frac_param["method"]: #Newton method
+                self.z,conv,dist,normal=frac_obj.Newton_method(frac_obj.array,
+                                                    lambda z: frac_obj.poly.poly(z,frac_obj.coefs),
+                                                    lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),
+                                                    lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs),
+                                                    frac_param["tol"],
+                                                    frac_param["itermax"],
+                                                    frac_param["damping"],
+                                                    orbit_form=orbit_form)
+
+            
+            elif "Halley" in frac_param["method"]:
+                self.z,conv,dist,normal=frac_obj.Halley_method(frac_obj.array,
+                                                    lambda z: frac_obj.poly.poly(z,frac_obj.coefs),
+                                                    lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),
+                                                    lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs),
+                                                    frac_param["tol"],
+                                                    frac_param["itermax"],
+                                                    frac_param["damping"],
+                                                    orbit_form=orbit_form)
+
+            # Julia fractal
+            elif "Julia" in frac_param["method"]:
+                pass
+                
+            #Mandelbrot fractal
+            elif "Mandelbrot" in frac_param["method"]:
+                pass
         
 
+        if param["shading"]:
+            normal=self.blinn_phong(normal,self.lights)
+
+        self.z,conv,dist=self.z.real,conv.real,dist.real
+        self.shaded=normal
+        frac_partial=binary_dilation((canny(conv)+sobel(conv*(-1))),iterations=1)+1e-02
+        #Plot
+        if param["shading"]:
+            #self.Plot(normal,self.file_name,param["dir"],print_create=param["verbose"])
+            #or
+            self.Plot(self.matplotlib_light_source(self.z*frac_partial),self.file_name,param["dir"],print_create=param["verbose"])
+
+        
+        if param["test"]:
+            #frac_partial=np.where(self.z<(frac_param["itermax"]-40),0,self.z)
+            self.Plot(self.shaded,self.file_name+"_shader",param["dir"],print_create=param["verbose"])
+            self.Plot(frac_partial,self.file_name+"_nobckg",param["dir"],print_create=param["verbose"])
+            self.Plot(frac_partial*normal,self.file_name+"_shader_nobckg",param["dir"],print_create=param["verbose"])
+            self.Plot(self.z,self.file_name+"_iter",param["dir"],print_create=param["verbose"])
+            
 
 
 
-        # Apply filters
-        #conv=self.Unsharp_masking(conv,sigma=1.5,amount=1)
-        #self.Anisotropic_diffusion(self.z,niter=10,kappa=70,gamma=0.25,step=(1.,1.),option=1)
-        #self.Plot(self.z,"anisotropic_diffusion",parameters["dir"])
-        #Binary map
-        conv=self.Local_treshold(conv) 
-        frac_entire=binary_dilation((canny(conv)+self.Local_treshold(conv*(-1)) +sobel(conv)))
-        # Save image
-        self.Plot(frac_entire,"canny",parameters["dir"])
-    ### IMAGE HANDLER ###
+        print("Fractal_image...Done")
+        return self.z
+
+    def adaptive_antialiasing(self,param):
+        pass
+    ############RENDERING#################
+    ### COLORS ###
+    def cmap_from_list(self,color_list):
+        """ Create a colormap from a list of colors
+
+        Args:
+            colors (list): list of colors
+
+        Returns:
+            matplotlib.colors.ListedColormap: colormap
+        """
+        cmap=colors.LinearSegmentedColormap.from_list("cmap",color_list)
+        #plt.cm.get_cmap(cmap, len(color_list)
+        return plt.cm.viridis
+    
+    def z_to_pixel_transfer_function(self,options:str, **kwargs):
+        """ Transfer function from z to pixel
+
+        Args:
+            options (str): options for the transfer function
+            Linear, Sqrt, Exp, Log, Sin, Atan, Atanh
+        Returns:
+            float: pixel value
+        """
+        index_val=self.z
+
+        ...
+
+        self.z=index_val
+        
+
+    ### SHADERS ###
+    def matplotlib_light_source(self,array,light=(315,20,1.5,1.2),blend_mode='hsv'):
+        """ Create a matplotlib light source
+p
+        Args:
+            light (tuple): light parameters
+            (azimuth, elevation, vert_exag, fraction)
+
+        Returns:
+            matplotlib.colors.LightSource: light source
+        """
+        lightS = colors.LightSource(azdeg=light[0], altdeg=light[1])
+        array = lightS.shade(array, cmap=self.cmap, vert_exag=light[2],
+                    norm=colors.PowerNorm(0.3), blend_mode=blend_mode,fraction=light[3])
+        return array
+    def blinn_phong(self,normal, light):
+        """ Blinn-Phong shading algorithm
+    
+        Brightess computed by Blinn-Phong shading algorithm, for one pixel,
+        given the normal and the light vectors
+
+        Args:
+        normal: complex number
+        light: (float, float, float)
+                light vector: angle azimuth [0-360], angle elevation [0-90],
+                opacity [0,1], k_ambiant, k_diffuse, k_spectral, shininess
+           
+        Returns:
+            float: Blinn-Phong brightness
+
+        from https://github.com/jlesuffleur/gpu_mandelbrot/blob/master/mandelbrot.py
+        """
+        ## Lambert normal shading (diffuse light)
+        normal=np.divide(normal, abs(normal), out=np.zeros_like(normal), where=normal!=0)    
+        
+        # theta: light azimuth; phi: light elevation
+        # light vector: [cos(theta)cos(phi), sin(theta)cos(phi), sin(phi)]
+        # normal vector: [normal.real, normal.imag, 1]
+        # Diffuse light = dot product(light, normal)
+        ldiff = (normal.real*np.cos(light[0])*np.cos(light[1]) +
+                normal.imag*np.sin(light[0])*np.cos(light[1]) +
+                1*np.sin(light[1]))
+        # Normalization
+        ldiff = ldiff/(1+1*np.sin(light[1]))
+        
+        ## Specular light: Blinn Phong shading
+        # Phi half: average between pi/2 and phi (viewer elevation)
+        # Specular light = dot product(phi_half, normal)
+        phi_half = (np.pi/2 + light[1])/2
+        lspec = (normal.real*np.cos(light[0])*np.sin(phi_half) +
+                normal.imag*np.sin(light[0])*np.sin(phi_half) +
+                1*np.cos(phi_half))
+        # Normalization
+        lspec = lspec/(1+1*np.cos(phi_half))
+        #spec_angle = max(0, spec_angle)
+        lspec = lspec ** light[6] # shininess
+        
+        ## Brightness = ambiant + diffuse + specular
+        bright = light[3] + light[4]*ldiff + light[5]*lspec
+        ## Add intensity
+        bright = bright * light[2] + (1-light[2])/2 
+        return bright
+    
+    ### FILTERS ###
+    def high_pass_gaussian(self,array,sigma=3):
+        """High pass gaussian filter"""
+        lowpass = gaussian_filter(array, sigma)
+        return array - lowpass
+    
+    def local_treshold(self,array):
+        """Local treshold filter"""
+        return array>threshold_local(array)
+    
+    def forces(self,array,param):
+        """
+         This uses the Mosaic algorithm to sprinkle the image
+         with "force points" which attract or repel pixels in
+         the image. For any given pixel, its final location is
+         the sum of all the forces acting on it. You cannot place
+         force points manually; they are placed by the same
+         algorithm which places mosaic tile centers.
+
+        """
+
+
+    ### BLENDING ###
+
+    ### POST-IMAGE HANDLER ###
     def crop(self,im_path):
         image=PILIM.open(im_path)
 
@@ -147,171 +378,79 @@ class IMAGE():
         return image_bg_copy
 
 
-    ############RENDERING#################
-    def Rendering_3D(self,parameters,image):
-        "takes 2D image as input and output 3D heightmap"
-        pass
-    ### COLORS ###
-
-    ### FILTERS ###
-    def Local_treshold(self,array):
-        """Local treshold filter"""
-        #mask=array>threshold_otsu(self.z) 
-        #array=(mask)*array
-        return array>threshold_local(array)
-
-    def Contrast(self,array,niter=10,kappa=50,gamma=0.1,step=(1.,1.),option=1):
-        """Contrast filter"""
-        return array-self.Anisotropic_diffusion(array,niter=niter,kappa=kappa,gamma=gamma,step=step,option=option)
-    
-    def Anisotropic_diffusion(self,array,niter=1,kappa=50,gamma=0.1,step=(1.,1.),option=1):
-        """
-        Anisotropic diffusion.
-    
-        Usage:
-        imgout = anisodiff(im, niter, kappa, gamma, option)
-    
-        Arguments:
-                img    - input image
-                niter  - number of iterations
-                kappa  - conduction coefficient 20-100 ?
-                gamma  - max value of .25 for stability
-                step   - tuple, the distance between adjacent pixels in (y,x)
-                option - 1 Perona Malik diffusion equation No 1
-                        2 Perona Malik diffusion equation No 2
-                ploton - if True, the image will be plotted on every iteration
-    
-        Returns:
-                imgout   - diffused image.
-    
-        kappa controls conduction as a function of gradient.  If kappa is low
-        small intensity gradients are able to block conduction and hence diffusion
-        across step edges.  A large value reduces the influence of intensity
-        gradients on conduction.
-    
-        gamma controls speed of diffusion (you usually want it at a maximum of
-        0.25)
-    
-        step is used to scale the gradients in case the spacing between adjacent
-        pixels differs in the x and y axes
-    
-        Diffusion equation 1 favours high contrast edges over low contrast ones.
-        Diffusion equation 2 favours wide regions over smaller ones.
-    
-        Reference: 
-        P. Perona and J. Malik. 
-        Scale-space and edge detection using ansotropic diffusion.
-        IEEE Transactions on Pattern Analysis and Machine Intelligence, 
-        12(7):629-639, July 1990.
-    
-        Original MATLAB code by Peter Kovesi  
-        School of Computer Science & Software Engineering
-        The University of Western Australia
-        pk @ csse uwa edu au
-        <http://www.csse.uwa.edu.au>
-    
-        Translated to Python and optimised by Alistair Muldal
-        Department of Pharmacology
-        University of Oxford
-        <alistair.muldal@pharm.ox.ac.uk>
-    
-        June 2000  original version.       
-        March 2002 corrected diffusion eqn No 2.
-        July 2012 translated to Python
-        """
-        # initialize output array
-        img = array.astype('float32')
-        imgout = img.copy()
-    
-        # initialize some internal variables
-        deltaS = np.zeros_like(imgout)
-        deltaE = deltaS.copy()
-        NS = deltaS.copy()
-        EW = deltaS.copy()
-        gS = np.ones_like(imgout)
-        gE = gS.copy()
-    
-        for ii in range(niter):
-    
-            # calculate the diffs
-            deltaS[:-1,: ] = np.diff(imgout,axis=0)
-            deltaE[: ,:-1] = np.diff(imgout,axis=1)
-    
-            # conduction gradients (only need to compute one per dim!)
-            if option == 1:
-                gS = np.exp(-(deltaS/kappa)**2.)/step[0]
-                gE = np.exp(-(deltaE/kappa)**2.)/step[1]
-            elif option == 2:
-                gS = 1./(1.+(deltaS/kappa)**2.)/step[0]
-                gE = 1./(1.+(deltaE/kappa)**2.)/step[1]
-    
-            # update matrices
-            E = gE*deltaE
-            S = gS*deltaS
-    
-            # subtract a copy that has been shifted 'North/West' by one
-            # pixel. don't ask questions. just do it. trust me.
-            NS[:] = S
-            EW[:] = E
-            NS[1:,:] -= S[:-1,:]
-            EW[:,1:] -= E[:,:-1]
-    
-            # update the image
-            imgout += gamma*(NS+EW)
-
-    
-        return imgout
-
-    def Unsharp_masking(self,array, sigma=1, amount=1):
-        """Unsharp masking filter"""
-        blurred = gaussian_filter(array, sigma=sigma)
-        return array + amount * (array - blurred)
-
-    ### SHADERS ###
-    def Phong_shader(self,array,light_direction,base_color):
-        from scipy.spatial import Delaunay
-
-        # Calculate the normal vectors at each vertex of the mesh
-        tri = Delaunay(array)
-        normals = np.cross(tri.points[tri.vertices[:,1]] - tri.points[tri.vertices[:,0]],
-                        tri.points[tri.vertices[:,2]] - tri.points[tri.vertices[:,0]])
-
-        # Calculate the illumination at each vertex using Phong shading
-        illumination = np.sum(light_direction * normals, axis=1)
-
-        # Apply the illumination to the colors of each vertex
-        colors = base_color * illumination
-        #Does this works?
-
-    def Fresnel_shader(self,array,light_direction,base_color):
-        pass
-    def Normal_mapping(self,array,light_direction,base_color):
-        pass
-        
 
 if __name__=='__main__':
-    parameters={
-    "frame_name":1,
-    "Animation":"Pulsing",
-    "Repetition":1,
-    "FPS":30 ,
-    "Duration":5, #seconds
-    "zoom":1.2,
-    "color_API_tuple":[[64,15,88],(15,5,0),(249,44,6),"N","N"],  #Example: [[r,g,b],"N","N","N","N"]
-    "cmap":"Greys",
-    "coord":np.array([[-1,1],[-1,1]]),
-    "degree": random.randint(5,20),
-    "rand_coef": True,
-    "coef": None, #Must have value if rand_coef==False
-    "dpi": 3000,
-    "itermax":150,
+    import time
+    cmap_dict = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
+                  'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
+                  'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn',
+                  'spring', 'summer', 'autumn', 'winter', 'cool','Wistia',
+                  'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy', 'RdBu', 'RdYlBu']
+    
+    raster_image_list=["circle","circle2","fire","human","eyes","planet","stars"]
+    start_time=time.time()
 
-    # RFA
-}
+    i=0
+    for k in range(1):
+        new_time=time.time()
+        print("-----------------",i,"------------------")
 
-    try:
-        obj=IMAGE(parameters)
-        obj.Image_maker(parameters)
+        param={
+        #### General parameters
+        "clean_dir":False, #clean image dir before rendering
+        "verbose":False, #print stuff
+        "test":True, #for trying stuff and knowing where to put it
+        "media_form":"image", #image or video
 
-    except KeyboardInterrupt:
-        sys.exit()
+        #### Image parameters
+        #General
+        "dir": "images",
+        "file_name": f"test{i}",
+        "raster_image":np.random.choice(raster_image_list), # if None, raster image is np.zeros((size,size))
+        "dpi":1000,
+
+        #Colors
+        "color_list":["black","darkgrey","orange","darkred"],
+
+        #Shading
+        "shading":True,
+        "lights": (45., 0, 40., 0, 0.5, 1.2, 1),
+        #Filters
+
+        #### Fractal parameters
+        "method": "RFA Newton",
+        "size": 500,
+        "domain":np.array([[-1,1],[-1,1]]),
+        ## RFA paramters
+        "random":True,
+        # Polynomial parameters (Must have value if random==False)
+        "degree": None, #random.randint(5,20),
+        "func": None,#[1,-1/2+np.sqrt(3)/2*1j,-1/2-np.sqrt(3)/2*1j,1/2+np.sqrt(3)/2*1j,1/2-np.sqrt(3)/2*1j], 
+        "form": "", #root, coefs, taylor_approx
+
+        "distance_calculation": 4, #see options of get_distance function in RFA_fractals.py
+        
+        #Method parameters
+        "itermax":50,
+        "tol":1e-8,
+        "damping":complex(1.01,-.01),
+
+        ##Julia parameters
+    }
+        try:
+            obj=IMAGE(param)
+            obj.Fractal_image(param)
+            print("raster image: ",param["raster_image"])
+
+
+            # Uncomment to plot 10 images with different cmap
+            #for j in range(10):
+            #    obj.cmap=np.random.choice(cmap_dict)
+            #    print(f"cmap{j}: ",obj.cmap)
+            #    obj.Plot(obj.shaded,param["image_name"]+f"_{j}",param["dir"],print_create=False)
+
+        except KeyboardInterrupt:
+            sys.exit()
+        #print("\nseconds: " ,(time.time() - new_time))
+        i+=1
+    print("----------------- {}.{:02d} min -----------------".format(int((time.time() - start_time)//60), int((time.time() - start_time)%60)))
