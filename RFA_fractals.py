@@ -3,10 +3,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import random as rd
-import time
-from scipy.ndimage import gaussian_filter,sobel,binary_dilation,distance_transform_edt
+from scipy.ndimage import distance_transform_edt
 from skimage.filters import threshold_mean, butterworth
-from scipy.optimize import root_scalar
 import itertools as it
 
 #plot handling
@@ -39,15 +37,17 @@ class Polynomials():
 
             if form=="root":
                 self.roots=func
-                self.coefs=self.roots_to_coefficients(self.roots)
-
-            elif form=="coefs":
-                self.coefs=func
-                self.roots=self.coefficients_to_roots(self.coefs)
+                self.coefs=self.roots_to_coefficients(self.roots)                
 
             elif form=="taylor_approx":
                 self.coefs=self.taylor_approximation(func,degree=self.__dict__.get("degree"),interval=self.__dict__.get("interval"))
                 self.roots=self.coefficients_to_roots(self.coefs)
+            else: #form=="coef" or form==None
+                #coefs by default
+                self.coefs=func
+                self.roots=self.coefficients_to_roots(self.coefs)
+        
+        
 
         ### POLYNOMIALS ###
     # Code taken from https://github.com/3b1b/videos/blob/master/_2022/quintic/roots_and_coefs.py
@@ -91,7 +91,7 @@ class Polynomials():
         if len(coefs) == 0:
             return []
         elif coefs[-1] == 0:
-            return coefficients_to_roots(coefs[:-1])
+            return self.coefficients_to_roots(coefs[:-1])
         roots = []
         # Find a root, divide out by (z - root), repeat
         for i in range(len(coefs) - 1):
@@ -175,7 +175,7 @@ class RFA_fractal():
 
         self.array = self.init_array(config["N"],config["domain"])
         self.poly = Polynomials(func=config["func"],random_poly=config["random"],form=config["form"],**kwargs)
-        self.coefs=self.poly.coefs
+        self.coefs=self.poly.coefs        
         #check if poly converges ok with sample of domain
         if config["random"]==True:
             count=0
@@ -186,27 +186,16 @@ class RFA_fractal():
                 print("Choose Polynomial...",end="\r")
                 z=self.init_array(100,config["domain"])
 
-                if "Newton" in config["method"]:
-                    up_treshold=0.6
-                    min_treshold=0.10
-                    z,u1,u2,u3=self.Newton_method(z,
-                                                  lambda z: self.poly.poly(z,self.coefs),
-                                                  lambda z: self.poly.dpoly(z,self.coefs),
-                                                  tol=1.e-05,
-                                                  max_steps=50,
-                                                  d2func= lambda z: self.poly.d2poly(z,self.coefs),
-                                                  verbose=False)
 
-                elif config["method"]=="Haley": #SAME FOR NOW
-                    up_treshold=0.35
-                    min_treshold=0.12
-                    z,u1,u2,u3=self.Nova_Halley_method(z,lambda z: self.poly.poly(z,self.coefs),lambda z: self.poly.dpoly(z,self.coefs),tol=1.e-05,max_steps=50)
-
-                elif config["method"]=="Secant": #SAME FOR NOW
-                    up_treshold=0.35
-                    min_treshold=0.12
-                    z,u1,u2,u3=self.Nova_Secant_method(z,lambda z: self.poly.poly(z,self.coefs),lambda z: self.poly.dpoly(z,self.coefs),tol=1.e-05,max_steps=50)
-
+                up_treshold=0.6
+                min_treshold=0.10
+                z,u1,u2,u3=self.Newton_method(z,
+                                                lambda z: self.poly.poly(z,self.coefs),
+                                                lambda z: self.poly.dpoly(z,self.coefs),
+                                                tol=1.e-05,
+                                                max_steps=50,
+                                                d2func= lambda z: self.poly.d2poly(z,self.coefs),
+                                                verbose=False)
 
                 gen_area=z > threshold_mean(z)
 
@@ -258,13 +247,13 @@ class RFA_fractal():
             distance = distance_map[i,j]*np.arctan(z)
 
         elif option==4:
-            distance=distance_map[i,j]*np.sin(z.real)*np.cos(z.imag)/np.arctan(z) # small smoothing circle
+            distance=distance_map[i,j]*np.sin(z.real)*np.cos(z.imag)/np.arctan(z) # small smoothing 
 
         elif option==5:
             distance=distance_map[i,j]*1/np.sqrt(2*np.pi*distance_map[i,j]**2)*np.exp(-z**2/(2*distance_map[i,j]**2)) #gaussian
 
         elif option==6:
-            distance= butterworth(distance_map[i,j]*z,highpass=True) #lowpass filter
+            distance= butterworth(distance_map[i,j]*z) #lowpass filter
 
         return distance.flatten()
 
@@ -411,28 +400,4 @@ class RFA_fractal():
         
 
 
-    #def Nova_Secant_method(self,tol=1.e-8,max_steps=100,damping_factor=complex(0.1,0.1),pixel=complex(0.1,0.1)):
-
-    #def Halley_method(self,array,func,dfunc,d2func,tol=1e-08,max_steps=100,damping=complex(0.5,0.5),c=0.15,verbose=True):
-
     #def Secant_method(self,tol=1.e-8,max_steps=100,damping_factor=complex(0.1,0.1),pixel=complex(0.1,0.1),verbose=True)):
-
-    def Orbit_trap(self,pre_o,traptype,trapshape,**kwargs):
-        """Orbit trap method for Fractal. Returns min between distance from orbit to orbit trap shape or distance from previous orbit
-        pre_o: previous orbit
-
-        traptype: method used to calculate orbit
-        options: "closest", "farthest", "sum","average","sign average","exponential average"
-
-        shape: shape of the orbit trap as a string. If "bitmap", the function will look for a image file with name kwargs filename
-        options: "bitmap","egg","ripple","perlin noise","fbm","Popcorn"
-
-        **kwargs: arguments (filename)
-        
-        """
-        def FBM(self,d):
-            """Fractional Brownian Motion"""
-
-        def Popcorn_pickover(self,d):
-            """Popcorn images"""
-    
