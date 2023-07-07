@@ -1,7 +1,6 @@
 import os
 import sys
 
-import random
 import numpy as np
 
 import matplotlib
@@ -11,10 +10,11 @@ import matplotlib.colors as colors
 from PIL import Image as PILIM
 
 from scipy.ndimage import gaussian_filter,sobel,binary_dilation
-from skimage.filters import threshold_otsu,threshold_local
+from skimage.filters import threshold_local
 from skimage.feature import canny
 
 from RFA_fractals import RFA_fractal
+
 ### GLOBAL FONCTIONS ###
 def clean_dir(folder,verbose=False):
     import shutil
@@ -49,12 +49,13 @@ class IMAGE():
     
     def set_image_parameters(self,param):
         self.dpi=param["dpi"]
-        self.cmap=param["cmap"]
         self.file_name=param["file_name"]
         if param["clean_dir"]:
             clean_dir(self.IM_DIR)
         if param["shading"]:
             self.lights=param["lights"]
+        
+        self.cmap=self.cmap_from_list(param["color_list"])
     
     def set_fractal_parameters(self,param):
         frac_param={}
@@ -72,6 +73,7 @@ class IMAGE():
         frac_param["damping"]=param["damping"]
         frac_param["itermax"]=param["itermax"]
         frac_param["verbose"]=param["verbose"]
+
         return frac_param
     
     ### PLOT ###
@@ -109,6 +111,8 @@ class IMAGE():
         if "RFA" in frac_param["method"]: #Root finding algorithm
             frac_obj=RFA_fractal(frac_param)
             frac_param["func"]=frac_obj.coefs
+            self.func=frac_obj.coefs
+
 
         ## Subtype of Fractal - Method will be called in the loop
         if "Nova" in frac_param["method"]: # NO VARIATION OF METHOD FOR SUBTYPES YET
@@ -181,36 +185,86 @@ class IMAGE():
             # Julia fractal
             elif "Julia" in frac_param["method"]:
                 pass
+                
+            #Mandelbrot fractal
+            elif "Mandelbrot" in frac_param["method"]:
+                pass
         
+
         if param["shading"]:
             normal=self.blinn_phong(normal,self.lights)
 
         self.z,conv,dist=self.z.real,conv.real,dist.real
         self.shaded=normal
+        frac_partial=binary_dilation((canny(conv)+sobel(conv*(-1))),iterations=1)+1e-02
         #Plot
         if param["shading"]:
-            self.Plot(normal,param["file_name"],param["dir"],print_create=param["verbose"])
-        
-        if param["experimental"]:
-            #frac_partial=binary_dilation((canny(conv)+sobel(conv*(-1))),iteratiopns=1)
-            frac_partial=np.where(self.z<(frac_param["itermax"]-40),0,self.z)
+            #self.Plot(normal,self.file_name,param["dir"],print_create=param["verbose"])
+            #or
+            self.Plot(self.matplotlib_light_source(self.z*frac_partial),self.file_name,param["dir"],print_create=param["verbose"])
 
-            self.Plot(self.shaded,param["file_name"]+"_shader",param["dir"],print_create=param["verbose"])
-            self.Plot(frac_partial,param["file_name"]+"_nobckg",param["dir"],print_create=param["verbose"])
-            self.Plot(frac_partial*normal,param["file_name"]+"_shader_nobckg",param["dir"],print_create=param["verbose"])
-            self.Plot(self.z,param["file_name"]+"_iter",param["dir"],print_create=param["verbose"])
+        
+        if param["test"]:
+            #frac_partial=np.where(self.z<(frac_param["itermax"]-40),0,self.z)
+            self.Plot(self.shaded,self.file_name+"_shader",param["dir"],print_create=param["verbose"])
+            self.Plot(frac_partial,self.file_name+"_nobckg",param["dir"],print_create=param["verbose"])
+            self.Plot(frac_partial*normal,self.file_name+"_shader_nobckg",param["dir"],print_create=param["verbose"])
+            self.Plot(self.z,self.file_name+"_iter",param["dir"],print_create=param["verbose"])
             
 
 
 
         print("Fractal_image...Done")
+        return self.z
 
     def adaptive_antialiasing(self,param):
         pass
     ############RENDERING#################
     ### COLORS ###
+    def cmap_from_list(self,color_list):
+        """ Create a colormap from a list of colors
+
+        Args:
+            colors (list): list of colors
+
+        Returns:
+            matplotlib.colors.ListedColormap: colormap
+        """
+        cmap=colors.LinearSegmentedColormap.from_list("cmap",color_list)
+        #plt.cm.get_cmap(cmap, len(color_list)
+        return plt.cm.viridis
+    
+    def z_to_pixel_transfer_function(self,options:str, **kwargs):
+        """ Transfer function from z to pixel
+
+        Args:
+            options (str): options for the transfer function
+            Linear, Sqrt, Exp, Log, Sin, Atan, Atanh
+        Returns:
+            float: pixel value
+        """
+        index_val=self.z
+
+        ...
+
+        self.z=index_val
+        
 
     ### SHADERS ###
+    def matplotlib_light_source(self,array,light=(315,20,1.5,1.2),blend_mode='hsv'):
+        """ Create a matplotlib light source
+p
+        Args:
+            light (tuple): light parameters
+            (azimuth, elevation, vert_exag, fraction)
+
+        Returns:
+            matplotlib.colors.LightSource: light source
+        """
+        lightS = colors.LightSource(azdeg=light[0], altdeg=light[1])
+        array = lightS.shade(array, cmap=self.cmap, vert_exag=light[2],
+                    norm=colors.PowerNorm(0.3), blend_mode=blend_mode,fraction=light[3])
+        return array
     def blinn_phong(self,normal, light):
         """ Blinn-Phong shading algorithm
     
@@ -260,6 +314,11 @@ class IMAGE():
         return bright
     
     ### FILTERS ###
+    def high_pass_gaussian(self,array,sigma=3):
+        """High pass gaussian filter"""
+        lowpass = gaussian_filter(array, sigma)
+        return array - lowpass
+    
     def local_treshold(self,array):
         """Local treshold filter"""
         return array>threshold_local(array)
@@ -274,6 +333,7 @@ class IMAGE():
          algorithm which places mosaic tile centers.
 
         """
+
 
     ### BLENDING ###
 
@@ -319,10 +379,6 @@ class IMAGE():
 
 
 
-
-
-
-
 if __name__=='__main__':
     import time
     cmap_dict = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
@@ -339,28 +395,22 @@ if __name__=='__main__':
         new_time=time.time()
         print("-----------------",i,"------------------")
 
-
         param={
         #### General parameters
         "clean_dir":False, #clean image dir before rendering
         "verbose":False, #print stuff
-        "experimental":True, #for trying stuff and knowing where to put it
-
-        #### Animation parameters
-        "Anim method":"Pulsing", #Pulsing, Zoom, Translation
-        "frame_number":1,
-        "frame_size": 2160,
-        "FPS":30 ,
-        "Duration":5, #seconds
-        "zoom":1.2, #if animation method is zoom 
+        "test":True, #for trying stuff and knowing where to put it
+        "media_form":"image", #image or video
 
         #### Image parameters
         #General
-        "cmap":np.random.choice(cmap_dict),
         "dir": "images",
-        "file_name": f"image{i}",
+        "file_name": f"test{i}",
         "raster_image":np.random.choice(raster_image_list), # if None, raster image is np.zeros((size,size))
+        "dpi":1000,
+
         #Colors
+        "color_list":["black","darkgrey","orange","darkred"],
 
         #Shading
         "shading":True,
@@ -369,16 +419,17 @@ if __name__=='__main__':
 
         #### Fractal parameters
         "method": "RFA Newton",
-        "size": 1000,
+        "size": 500,
         "domain":np.array([[-1,1],[-1,1]]),
         ## RFA paramters
         "random":True,
-        # Polynomial parameters #Must have value if random==False
+        # Polynomial parameters (Must have value if random==False)
         "degree": None, #random.randint(5,20),
         "func": None,#[1,-1/2+np.sqrt(3)/2*1j,-1/2-np.sqrt(3)/2*1j,1/2+np.sqrt(3)/2*1j,1/2-np.sqrt(3)/2*1j], 
         "form": "", #root, coefs, taylor_approx
 
         "distance_calculation": 4, #see options of get_distance function in RFA_fractals.py
+        
         #Method parameters
         "itermax":50,
         "tol":1e-8,
@@ -386,13 +437,11 @@ if __name__=='__main__':
 
         ##Julia parameters
     }
-
-        param["dpi"]=param["size"]
         try:
             obj=IMAGE(param)
             obj.Fractal_image(param)
             print("raster image: ",param["raster_image"])
-            print("cmap: ",param["cmap"])
+
 
             # Uncomment to plot 10 images with different cmap
             #for j in range(10):
