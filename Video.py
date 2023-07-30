@@ -79,89 +79,10 @@ class Videos():
         mask = x*x + y*y <= r*r
 
         return mask
-    #### TRANSLATION ####
-    #RFA
-    def translate_poly(self,coords):
-        """
-        z: array of complex numbers
-        coords: list coef of polynomial
-        """
-
-        #np.array([[-1,1],[-1,1]]) format
-        coords[0,:]+=1e-2 #translation on real axis
-        return coords
-
-    #### ZOOM ####
-    def check_coord(self,z,dpi,coord,zoom):
-        print("RFA-checking coord...")
-
-        #check for edges 
-        bitmap=z > threshold_mean(z)
-
-        #init old coord
-        array=self.init_array(dpi,coord)
-        print("array extremity",array[0,0],array[-1,-1])
-
-        edges=canny(bitmap,0.1)
-
-
-        for i in range(10,int(z.size),5):
-            mask=self.circle_mask(z,dpi,i)
-            points=np.where(edges==mask,mask,np.zeros_like(mask))
-            if np.any(points)==True:
-                candidate=np.where(points==True)
-                point=[candidate[0][0],candidate[1][0]]
-                print("Array indice",point)
-                break
-        try:
-            pts=array[point[0],point[1]]
-        except:
-            return coord*zoom,[0,0]
-        pts=[pts.real,pts.imag]
-
-        coord=np.array([[(pts[0])-1*zoom,(pts[0])+1*zoom], #real
-                    [(pts[1])-1*zoom,(pts[1])+1*zoom]]) #complex
-        print("Done (RFA-checking coord)")
-        return coord,point
     
     ### VIDEO MAKER ###
     def Video_maker(self,param):
         print("Video maker (V-vm)...",end="")
-        if param["anim method"]=="rotation":
-            damping_list=np.linspace(0.4,1.35,self.fps*self.seconds+1)+np.linspace(-0.5,0.85,self.fps*self.seconds+1)*1j
-            param["damping"]=damping_list[0]
-
-        if param["anim method"]=="grain": #in grain animation, we only need one image to create the video
-            ...
-        else: 
-            #Create video
-            for _ in range(self.fps*self.seconds):
-                print(_,end="\r")
-
-                #Create frame
-                Imobj=IMAGE(param) 
-                Imobj.Fractal_image(param)
-                param["func"]=Imobj.func
-
-                #Save frame
-                PILIM.open(os.path.join(param["dir"],Imobj.file_name)+".png").save(self.FRAME_DIR+f"/frame_{self.frame_name}.png")
-
-                #update frame
-                self.frame_name+=1
-
-                ## Update parameters
-                #RFA Fractal
-                param["random"]=False #True only for first frame at most
-
-                if param["anim method"]=="zoom":
-                    #Update zoom
-                    self.zoom=self.zoom/self.zoom_speed
-                    param["domain"],param["pts"]=self.check_coord(self.z,self.dpi,param["domain"],self.zoom)
-
-                elif param["anim method"]=="rotation":
-                    param["damping"]=damping_list[self.frame_name]
-                    print("damping",param["damping"])
-
 
         #Copy frame dir to Desktop
         from time import strftime,gmtime
@@ -178,102 +99,169 @@ class Videos():
         print("Done (V-vm)")
 
     ### ANIMATIONS ###
-    def deteriorate_border_anim(self,img, border_thickness=200, hole_size=3, n_frames=100):
-        """
-        Apply granular gfilter to an image
-
-        img: a numpy array of shape (height, width, 3)
-        border_thickness: the thickness of the granular gfilter from the border (pixels)
-        hole_size: the size of the holes (radius of the disk structuring element)
-
-        return: a numpy array of shape (height, width, 3)
-        """
-        print("deterioating border...",end="")
-
-        def do_grain(mask_border,fill_value=0.3):
+    def Grain_anim(self,im_path,im_path_2=None, **kwargs):
+        '''Generate explosion animation of input image, with rotational grain effect and flickering
+        im_path: path of image to explode
+        im_path_2 (optionnal): put explosion on top of this image
+        '''
+        def deteriorate_border_anim(img, border_thickness=200, hole_size=3, n_frames=100):
             """
-            grainification of an image
+            Apply granular gfilter to an image
 
+            img: a numpy array of shape (height, width, 3)
+            border_thickness: the thickness of the granular gfilter from the border (pixels)
+            hole_size: the size of the holes (radius of the disk structuring element)
+
+            return: a numpy array of shape (height, width, 3)
             """
-            # Apply distance transform
-            dist_transform = cv2.distanceTransform(mask_border.astype(np.uint8), cv2.DIST_L2, 5)
-            # Normalize the distance transform image for viewing
-            mask = (cv2.normalize(dist_transform, None, alpha=fill_value, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F))
-            # create the granular gfilter
-            gfilter = np.zeros(mask.shape)
-            gfilter = np.random.rand(*mask.shape) <= mask
-            return gfilter
+            print("deterioating border...",end="")
 
-        def grain_fill(gfilter,fill_value=0.3):
-            """
-            fill empty space in  gfilter with more grain
-            """
-            dilation=ndimage.binary_fill_holes(gfilter.copy())
+            def do_grain(mask_border,fill_value=0.3):
+                """
+                grainification of an image
 
-            # Apply distance transform
-            dist_transform = np.float_power(cv2.distanceTransform(dilation.astype(np.uint8), cv2.DIST_LABEL_PIXEL, 5),0.7)
-            # Normalize the distance transform image for viewing
-            mask = (cv2.normalize(dist_transform, None, alpha=fill_value, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F))
-            # create the granular gfilter
-            new_filter = np.zeros(mask.shape)
-            new_filter = np.random.rand(*mask.shape) <= mask
+                """
+                # Apply distance transform
+                dist_transform = cv2.distanceTransform(mask_border.astype(np.uint8), cv2.DIST_L2, 5)
+                # Normalize the distance transform image for viewing
+                mask = (cv2.normalize(dist_transform, None, alpha=fill_value, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F))
+                # create the granular gfilter
+                gfilter = np.zeros(mask.shape)
+                gfilter = np.random.rand(*mask.shape) <= mask
+                return gfilter
 
-            return new_filter
+            def grain_fill(gfilter,fill_value=0.3):
+                """
+                fill empty space in  gfilter with more grain
+                """
+                dilation=ndimage.binary_fill_holes(gfilter.copy())
+
+                # Apply distance transform
+                dist_transform = np.float_power(cv2.distanceTransform(dilation.astype(np.uint8), cv2.DIST_LABEL_PIXEL, 5),0.7)
+                # Normalize the distance transform image for viewing
+                mask = (cv2.normalize(dist_transform, None, alpha=fill_value, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F))
+                # create the granular gfilter
+                new_filter = np.zeros(mask.shape)
+                new_filter = np.random.rand(*mask.shape) <= mask
+
+                return new_filter
+                
+            width,height=img.shape[0],img.shape[1]
+
+            # Hide center from gfilter
+            mask=np.ones((width,height))
+            mask[border_thickness:-border_thickness,border_thickness:-border_thickness]=0
+            mask_border=np.copy(mask)
+
+            #smaller mask
+            small_gfilter=np.ones((width,height))
+            border_thickness_small=border_thickness//2
+            small_gfilter[border_thickness_small:-border_thickness_small,border_thickness_small:-border_thickness_small]=0
+
+            gfilter=do_grain(mask_border,fill_value=0.0)
+            small_gfilter=do_grain(small_gfilter,fill_value=0.3)
+
+            small_gfilter=small_gfilter.astype(bool)
+            # Apply the granular gfilter on the distance transform
+            gfilter[small_gfilter]= ndimage.binary_dilation(gfilter[small_gfilter],iterations=hole_size)
+            gfilter = np.logical_not(gfilter).astype(np.float64)
             
-        width,height=img.shape[0],img.shape[1]
+            frame_list=[]
+            
+            #Animate rotation of grain
+            new_gfilter=np.zeros((width,height))
 
-        # Hide center from gfilter
-        mask=np.ones((width,height))
-        mask[border_thickness:-border_thickness,border_thickness:-border_thickness]=0
-        mask_border=np.copy(mask)
+            if isinstance(img,list): #frame list
+                n_frames = len(img)
+                angles = np.around(np.linspace(0, 360, n_frames),2)
 
-        #smaller mask
-        small_gfilter=np.ones((width,height))
-        border_thickness_small=border_thickness//2
-        small_gfilter[border_thickness_small:-border_thickness_small,border_thickness_small:-border_thickness_small]=0
+                for image in img:
+                    i = angles[img.index(image)]
+                    print("rotation grain anim: ",int(i),"/360", end="\r")
+                    gfilter_rotated=ndimage.rotate(gfilter,i,reshape=False,cval=0,prefilter=False,mode="constant")
+                    new_gfilter+=gfilter_rotated-0.3*new_gfilter
 
-        gfilter=do_grain(mask_border,fill_value=0.0)
-        small_gfilter=do_grain(small_gfilter,fill_value=0.3)
+                    new_gfilter+=grain_fill(new_gfilter,fill_value=0.0).astype(np.float64)
+                    #new_gfilter %= 10
 
-        small_gfilter=small_gfilter.astype(bool)
-        # Apply the granular gfilter on the distance transform
-        gfilter[small_gfilter]= ndimage.binary_dilation(gfilter[small_gfilter],iterations=hole_size)
-        gfilter = np.logical_not(gfilter).astype(np.float64)
-        
-        new_img_list=[]
-        
-        #Animate rotation of grain
-        new_gfilter=np.zeros((width,height))
-        angles = np.around(np.linspace(0, 360, n_frames),2)
-        for i in angles:
-            print("rotation grain anim: ",int(i),"/360", end="\r")
-            gfilter_rotated=ndimage.rotate(gfilter,i,reshape=False,cval=0,prefilter=False,mode="constant")
-            new_gfilter+=gfilter_rotated-0.3*new_gfilter
-
-            new_gfilter+=grain_fill(new_gfilter,fill_value=0.0).astype(np.float64)
-            #new_gfilter %= 10
-
-            new_gfilter = np.clip(new_gfilter,0,1.2)
+                    new_gfilter = np.clip(new_gfilter,0,1.2)
 
 
-            # Convert the numpy array back to a PIL Image and append it to the frames list
-            try:
-                new_img=img * np.repeat(new_gfilter[:, :, np.newaxis], 4, axis=2)
-                print("RGBA mode ", end="")
-            except:
-                try:
-                    new_img=img * np.repeat(new_gfilter[:, :, np.newaxis], 3, axis=2)
-                    print("RGB mode ", end="")
-                except:
-                    new_img=img * new_gfilter
-                    print("L mode ",end="")
-        
-            new_img_list.append(np.uint8(new_img)) # to save as gif
+                    # Convert the numpy array back to a PIL Image and append it to the frames list
+                    try:
+                        new_img=image * np.repeat(new_gfilter[:, :, np.newaxis], 4, axis=2)
+                        print("RGBA mode ", end="")
+                    except:
+                        try:
+                            new_img=image * np.repeat(new_gfilter[:, :, np.newaxis], 3, axis=2)
+                            print("RGB mode ", end="")
+                        except:
+                            new_img=image * new_gfilter
+                            print("L mode ",end="")
+                
+                    frame_list.append(np.uint8(new_img)) # to save as gif
 
-        print('deterioate border anim done')
-        return new_img_list
+
+            else:
+                angles = np.around(np.linspace(0, 360, n_frames),2)
+                for i in angles:
+
+                    print("rotation grain anim: ",int(i),"/360", end="\r")
+                    gfilter_rotated=ndimage.rotate(gfilter,i,reshape=False,cval=0,prefilter=False,mode="constant")
+                    new_gfilter+=gfilter_rotated-0.3*new_gfilter
+
+                    new_gfilter+=grain_fill(new_gfilter,fill_value=0.0).astype(np.float64)
+                    #new_gfilter %= 10
+
+                    new_gfilter = np.clip(new_gfilter,0,1.2)
+
+
+                    # Convert the numpy array back to a PIL Image and append it to the frames list
+                    try:
+                        new_img=img * np.repeat(new_gfilter[:, :, np.newaxis], 4, axis=2)
+                        print("RGBA mode ", end="")
+                    except:
+                        try:
+                            new_img=img * np.repeat(new_gfilter[:, :, np.newaxis], 3, axis=2)
+                            print("RGB mode ", end="")
+                        except:
+                            new_img=img * new_gfilter
+                            print("L mode ",end="")
+                
+                    frame_list.append(np.uint8(new_img)) # to save as gif
+
+            print('deterioate border anim done')
+            return frame_list
     
-    def flicker(img,flicker_percentage=0.0005,on_fractal=False, dilation_size = 2,flicker_amplitude=0.9, n_frames=100):
+        #explosion
+        self.EX_DIR=os.path.join(self.VID_DIR,"explosion")
+        clean_dir(self.EX_DIR)
+        try:
+            os.mkdir(self.EX_DIR)
+        except:
+            pass
+
+        image=PILIM.open(im_path)
+
+        #Explosion is resizing of image w/ filter
+        inf_size=(1,1)
+        sup_size=(image.size[0],image.size[1])
+        list_ex=((np.arange(inf_size[0],np.sqrt(sup_size[0])))**2).astype(int)
+        list_ex=np.append(np.unique(list_ex),sup_size[0])
+
+        #Create frames
+        frame_list = deteriorate_border_anim(image,**kwargs)
+        
+        # Apply resizing explosion
+            #match size of explosion to size of image
+        for i in range(len(frame_list)-len(list_ex)):
+            list_ex = np.append(list_ex,list_ex[-1])
+        for i in range(len(frame_list)):
+            frame_list[i]=frame_list[i].resize((list_ex[i],list_ex[i]))
+        
+        return frame_list
+    
+    def Flicker(img,flicker_percentage=0.0005,on_fractal=False, dilation_size = 2,flicker_amplitude=0.9, n_frames=100):
         """
         Apply a flicker animation to an image
 
@@ -393,47 +381,80 @@ class Videos():
         images (list or str): list of image paths, or path of directory containing images
         '''        
         #pulsing
+        frame_list = []
+
+    #Zoom
+    def Zoom(self,param):
+        frame_list = []
+        def check_coord(self,z,dpi,coord,zoom):
+            print("RFA-checking coord...")
+
+            #check for edges 
+            bitmap=z > threshold_mean(z)
+
+            #init old coord
+            array=self.init_array(dpi,coord)
+            print("array extremity",array[0,0],array[-1,-1])
+
+            edges=canny(bitmap,0.1)
 
 
+            for i in range(10,int(z.size),5):
+                mask=self.circle_mask(z,dpi,i)
+                points=np.where(edges==mask,mask,np.zeros_like(mask))
+                if np.any(points)==True:
+                    candidate=np.where(points==True)
+                    point=[candidate[0][0],candidate[1][0]]
+                    print("Array indice",point)
+                    break
+            try:
+                pts=array[point[0],point[1]]
+            except:
+                return coord*zoom,[0,0]
+            pts=[pts.real,pts.imag]
 
-    def Grain_anim(self,im_path,im_path_2=None):
-        '''Generate explosion animation of input image, with rotational grain effect and flickering
-        im_path: path of image to explode
-        im_path_2 (optionnal): put explosion on top of this image
-        '''
-        #explosion
-        self.EX_DIR=os.path.join(self.VID_DIR,"explosion")
-        clean_dir(self.EX_DIR)
-        try:
-            os.mkdir(self.EX_DIR)
-        except:
-            pass
+            coord=np.array([[(pts[0])-1*zoom,(pts[0])+1*zoom], #real
+                        [(pts[1])-1*zoom,(pts[1])+1*zoom]]) #complex
+            print("Done (RFA-checking coord)")
+            return coord,point
+        
+        for _ in range(self.fps*self.seconds):
+            print(_,end="\r")
+            #Create frame
+            Imobj=IMAGE(param) 
+            im = Imobj.Fractal_image(param)
+            param["func"]=Imobj.func
 
-        image=PILIM.open(im_path)
+            param["random"]=False #True only for first frame at most
 
-        #Explosion is resizing of image w/ filter
-        inf_size=(1,1)
-        sup_size=(image.size[0],image.size[1])
-        list_ex=((np.arange(inf_size[0],np.sqrt(sup_size[0])))**2).astype(int)
-        list_ex=np.append(np.unique(list_ex),sup_size[0])
-        for i in list_ex:
-            print(i,end="\r")
-            image=PILIM.open(im_path).resize((i,i))
+            #save frame
+            frame_list.append(im)
 
-            # apply filter
-            image=self.deteriorate_border(image)
+            # update zoom
+            self.zoom = self.zoom/self.zoom_speed
+            param["domain"],param["pts"]=check_coord(self.z,self.dpi,param["domain"],self.zoom)
+        return frame_list
 
-            #save image
-            image.save(os.path.join(self.EX_DIR,f"explosion_{i}.png"))
+    def Translate(self, param, init_damp_r = 0.4, end_damp_r = 1.35, init_damp_c = -0.5, end_damp_c = 0.85):
+        frame_list = []
+        damping_list=np.linspace(init_damp_r,end_damp_r,self.fps*self.seconds+1)+np.linspace(init_damp_c,end_damp_c,self.fps*self.seconds+1)*1j
+        param["damping"]=damping_list[0]
 
-        ...
-        #grain
+        for _ in range(self.fps*self.seconds):
+            print(_,end="\r")
 
-        #flicker
+            #Create frame
+            Imobj=IMAGE(param) 
+            im = Imobj.Fractal_image(param)
+            param["func"]=Imobj.func
 
-        #Create video
-        self.Create_video(self.EX_DIR,self.fps)
+            param["random"] = False
+            param["damping"]=damping_list[_]
+            #save frame
+            frame_list.append(im)
 
+        return frame_list
+    
 if __name__=='__main__':
     i=0
     cmap_dict = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',

@@ -55,7 +55,10 @@ class IMAGE():
         if param["shading"]:
             self.lights=param["lights"]
         
-        self.cmap=self.cmap_from_list(param["color_list"])
+        if param["cmap"] is None:
+            self.cmap=self.cmap_from_list(param["color_list"])
+        else:
+            self.cmap=matplotlib.cm.get_cmap(param["cmap"])
     
     def set_fractal_parameters(self,param):
         frac_param={}
