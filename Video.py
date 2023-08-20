@@ -4,6 +4,7 @@ import numpy as np
 
 import matplotlib
 matplotlib.use('agg')
+import matplotlib.pyplot as plt
 from PIL import Image as PILIM
 
 import cv2
@@ -13,7 +14,7 @@ from skimage.filters import threshold_mean
 from skimage.feature import canny
 from skimage.morphology import disk,dilation
 
-
+import time
 from Image import IMAGE
 
 def clean_dir(folder):
@@ -30,15 +31,17 @@ def clean_dir(folder):
             print('Failed to delete %s. Reason: %s' % (file_path, e))
 
 
-class Videos():
+class VIDEO():
     def __init__(self,param) -> None:
         print("Init Videos class(V-Init) fractals...")
 
         ### Create folders
         self.APP_DIR = os.path.dirname(os.path.abspath(__file__))
         self.IM_DIR=os.path.join(self.APP_DIR,"images")
-        self.VID_DIR=os.path.join(self.APP_DIR,"video")
         try: os.mkdir(self.IM_DIR)
+        except: pass
+        self.VID_DIR=os.path.join(self.APP_DIR,"video")
+        try: os.mkdir(self.VID_DIR)
         except: pass
 
         self.FRAME_DIR=os.path.join(self.VID_DIR,"frames")
@@ -57,11 +60,12 @@ class Videos():
 
         self.frame_name=0
 
-        if param["anim method"]=='zoom':
-            self.zoom=1
-            self.zoom_speed=param["zoom"]
-        elif param["anim method"]=="water move":
-            pass
+
+        self.zoom=1
+        self.zoom_speed=param["zoom"]
+
+        self.frac_boundary = []
+
 
     ## ARRAY HANDLING
     def init_array(self,N,domain):
@@ -261,7 +265,7 @@ class Videos():
         
         return frame_list
     
-    def Flicker(img,flicker_percentage=0.0005,on_fractal=False, dilation_size = 2,flicker_amplitude=0.9, n_frames=100):
+    def Flicker(self,img_input,flicker_percentage=0.0005,on_fractal=False, dilation_size = 2,flicker_amplitude=0.9, n_frames=300):
         """
         Apply a flicker animation to an image
 
@@ -274,16 +278,16 @@ class Videos():
 
         return: a list of numpy arrays of shape [frames,(height, width, 3)]
         """
+        print("Flicker animation...", end="")
         # We'll store each frame as we create it
         frames = []
-
         # Calculate the total number of pixels
-        if isinstance(img,list):
-            total_pixels = img[0].shape[0] * img[0].shape[1]
-            width,height=img[0].shape[0],img[0].shape[1]
+        if isinstance(img_input,list):
+            total_pixels = img_input[0].shape[0] * img_input[0].shape[1]
+            width,height=img_input[0].shape[0],img_input[0].shape[1]
         else: 
-            total_pixels = img.shape[0] * img.shape[1]
-            width,height=img.shape[0],img.shape[1]
+            total_pixels = img_input.shape[0] * img_input.shape[1]
+            width,height=img_input.shape[0],img_input.shape[1]
         num_flicker_pixels = int(total_pixels * flicker_percentage)
 
         # Generate the indices of the pixels to flicker
@@ -319,13 +323,13 @@ class Videos():
         
         pulse_func=lambda x: (smooth_step(np.mod(x,1.5),-4,0.6)-smooth_step(np.mod(x,1.5),-5-1/3,0.8))/0.006821  #experimentally determined (lol)
 
-        if isinstance(img,list): #multiple images
+        if isinstance(img_input,list): #multiple images
             i = 0
-            for img_array in img:
-
+            for img_array in img_input:
+                img_array = img_array.copy()
                 # Create a multiplier that goes between 1-flicker_amplitude and 1+flicker_amplitude
                 # We use a function to create a smooth flicker effect
-                flicker_multiplier = np.array((1 + flicker_amplitude * pulse_func((mask_start * i)/300 + 1.5)))[mask]
+                flicker_multiplier = np.array((1 + flicker_amplitude * pulse_func((mask_start * i) + 1.5)))[mask]
 
                 if img_array.shape[-1]==4:
                     #RGBA
@@ -343,7 +347,7 @@ class Videos():
                 # Convert the numpy array back to a PIL Image and append it to the frames list
                 frames.append(np.uint8(img_array))
 
-                i+=1/len(img)
+                i+=1/len(img_input)
             
         else: #single image
 
@@ -354,17 +358,17 @@ class Videos():
                 # We use a function to create a smooth flicker effect
                 flicker_multiplier = np.array((1 + flicker_amplitude * pulse_func(mask_start * i / num_frames+1.5)))[mask]
 
-                if img.shape[-1]==4:
+                if img_input.shape[-1]==4:
                     #RGBA
                     flicker_multiplier = np.repeat(flicker_multiplier[:, np.newaxis], 4, axis=1)
-                elif img.shape[-1]==3:
+                elif img_input.shape[-1]==3:
                     #RGB
                     flicker_multiplier = np.repeat(flicker_multiplier[:, np.newaxis], 3, axis=1)
                 else:
                     #L
                     pass
                 # copy the array so we don't overwrite the original
-                img_array = img.copy()
+                img_array = img_input.copy()
 
                 # apply the flicker effect
                 img_array[mask] = np.clip(img_array[mask] * flicker_multiplier,0,200)
@@ -376,63 +380,130 @@ class Videos():
 
         return frames
 
-    def Pulsing(self,images,on_fractal = False):
-        '''Generate pulsing animation in input images
-        images (list or str): list of image paths, or path of directory containing images
-        '''        
-        #pulsing
-        frame_list = []
+    def Pulsing(img_obj,fractal_bounds,beta=None,decal=0,**kwargs):
+        """ 
+        Create a pulsing animation of the fractal image
 
+        img_obj: single array or list of arrays
+        frac_boundary: array of the fractal boundary, if None, it is img_obj.frac_boundary (img_obj must be an IMAGE object)
+        """
+        print("Pulsing...")
+        def f(u,beta = -0.03):
+            #beta = -0.03  # Damping coefficient for oscillations
+            omega = 2*np.pi # Frequency of oscillations
+            A = 1 #amplitude
+            return A * np.exp(- beta * u) * np.sin(omega * u)
+        
+        if isinstance(img_obj,list):
+            img = img_obj[0]
+
+            frac_size = img.shape[0]
+            # Time
+            max_t = len(img_obj)
+
+            #speed of the wave
+            c = (frac_size + decal)//max_t
+        else:
+            img = img_obj
+
+            frac_size = img_obj.shape[0]
+            
+            c = frac_size // 300  # speed of the wave
+            # Time
+            max_t = (frac_size + decal) // c
+        
+        if beta is None:
+            beta = - 25 / frac_size
+        
+        # Gif properties
+        # Source location
+        x_center, y_center = frac_size // 2, frac_size // 2
+        # Wave properties
+
+
+
+        # frame array
+        frame_array = []
+
+        X, Y = np.meshgrid(np.arange(frac_size), np.arange(frac_size))
+        R = np.sqrt((X - x_center)**2 + (Y - y_center)**2) #distance
+
+        Mask = np.zeros((frac_size, frac_size))
+        
+        for step,t in enumerate(np.arange(0, max_t, 1)):
+
+            Mask = np.where(R<= c*t,1,0 ) # where c*t is peak of a Gaussian wave
+            Psi = f(R - c * t,beta=beta)
+
+            if isinstance(img_obj,list):
+                wave_im = (((Psi * Mask) * fractal_bounds[step] * 255)).astype(np.uint8)
+
+                img_obj[step] = (img_obj[step] * 255/np.max(img_obj[step]))
+                plt.imsave(f"images/pulse.png", wave_im + img_obj[step]//3, vmin=0, vmax=255, **kwargs)
+            else: #single image
+                wave_im = (((Psi * Mask) * fractal_bounds * 255)).astype(np.uint8)
+                
+                img = (img * 255/np.max(img)) # image always appears
+                #or
+                #img /= np.max(img) # image appears with wave
+                plt.imsave(f"images/pulse.png", wave_im + img//2, vmin=0, vmax=255, **kwargs)
+            
+            wave_im = PILIM.open(f"images/pulse.png").resize(img.shape)
+            wave_im = np.asarray(wave_im)
+
+            frame_array.append(wave_im)
+            print("  ",step,"/",max_t,np.max(Psi) ,end="\r")
+        print("Pulsing done")
+        return frame_array
     #Zoom
     def Zoom(self,param):
         frame_list = []
-        def check_coord(self,z,dpi,coord,zoom):
-            print("RFA-checking coord...")
-
-            #check for edges 
-            bitmap=z > threshold_mean(z)
-
+        def check_coord(z,edges,dpi,coord,zoom,prev_point):
             #init old coord
             array=self.init_array(dpi,coord)
-            print("array extremity",array[0,0],array[-1,-1])
 
-            edges=canny(bitmap,0.1)
-
-
-            for i in range(10,int(z.size),5):
+            for i in range(1,int(z.size),1):
                 mask=self.circle_mask(z,dpi,i)
                 points=np.where(edges==mask,mask,np.zeros_like(mask))
                 if np.any(points)==True:
                     candidate=np.where(points==True)
                     point=[candidate[0][0],candidate[1][0]]
-                    print("Array indice",point)
                     break
             try:
                 pts=array[point[0],point[1]]
             except:
-                return coord*zoom,[0,0]
+                return coord*zoom,prev_point
             pts=[pts.real,pts.imag]
 
             coord=np.array([[(pts[0])-1*zoom,(pts[0])+1*zoom], #real
                         [(pts[1])-1*zoom,(pts[1])+1*zoom]]) #complex
-            print("Done (RFA-checking coord)")
             return coord,point
         
+        start_time =  time.time()
         for _ in range(self.fps*self.seconds):
-            print(_,end="\r")
+            print("  ",_,end="")
             #Create frame
             Imobj=IMAGE(param) 
-            im = Imobj.Fractal_image(param)
-            param["func"]=Imobj.func
+            im = Imobj.Fractal_image()
 
+            param["func"]= Imobj.func
+            param["form"]=None
             param["random"]=False #True only for first frame at most
-
+            param["verbose"]=False
+            param["pts"] = [0,0]
             #save frame
+            self.frac_boundary.append(Imobj.frac_boundary)
             frame_list.append(im)
 
             # update zoom
             self.zoom = self.zoom/self.zoom_speed
-            param["domain"],param["pts"]=check_coord(self.z,self.dpi,param["domain"],self.zoom)
+            param["domain"],param["pts"]=check_coord(im,Imobj.frac_boundary,param["dpi"],param["domain"],self.zoom,prev_point=param["pts"])
+
+            end_time = time.time()
+            if _ == 0:
+                total_time = (end_time-start_time)*self.fps*self.seconds
+            print("  progress: ",np.around((end_time-start_time),2),"/",total_time, "time left: ",np.around((total_time - np.around((end_time-start_time),2))/60,2),"min",end = "\r")
+            #param["domain"]=param["domain"]*self.zoom
         return frame_list
 
     def Translate(self, param, init_damp_r = 0.4, end_damp_r = 1.35, init_damp_c = -0.5, end_damp_c = 0.85):

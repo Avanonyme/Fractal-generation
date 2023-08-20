@@ -33,7 +33,8 @@ def clean_dir(folder,verbose=False):
 class IMAGE():
     ### SET PARAM^ ###
     def __init__(self,param) -> None:
-        print("Init Image class...",end="\r")
+        if param["verbose"]:
+            print("Init Image class...",end="\r")
         ### Create folders
         self.APP_DIR = os.path.dirname(os.path.abspath(__file__))
         self.IM_DIR=os.path.join(self.APP_DIR,param["dir"])
@@ -45,9 +46,11 @@ class IMAGE():
         self.set_image_parameters(param)
         self.print=param["verbose"]
 
-        print("Init Image class...Done")
+        if param["verbose"]:
+            print("Init Image class...Done")
     
     def set_image_parameters(self,param):
+        self.param=param
         self.dpi=param["dpi"]
         self.file_name=param["file_name"]
         if param["clean_dir"]:
@@ -63,6 +66,7 @@ class IMAGE():
     def set_fractal_parameters(self,param):
         frac_param={}
         frac_param["N"]=param["size"]
+        self.frac_size = param["size"]
         frac_param["domain"]=param["domain"]
 
         frac_param["random"]=param["random"]
@@ -80,14 +84,15 @@ class IMAGE():
         return frac_param
     
     ### PLOT ###
-    def Plot(self,array,name,Dir,print_create=True):
+    def Plot(self,array,name,Dir,print_create=True,**kwargs):
         """Plot a numpy array as an image"""
         fig = plt.figure(frameon=False)
         fig.set_size_inches(1,1)    
         ax = plt.Axes(fig, [0., 0., 1., 1.])
         ax.set_axis_off()
         fig.add_axes(ax)
-        ax.imshow(array,cmap=self.cmap)
+        array = (array * 255/array.max()).astype(np.uint8)
+        ax.imshow(array,cmap=self.cmap,**kwargs,vmin=0,vmax=255)
 
         fig.savefig(Dir+"/"+name,dpi=self.dpi) 
         if print_create==True:
@@ -97,18 +102,19 @@ class IMAGE():
         return None
     
     ### FRACTAL IMAGE ###
-    def Fractal_image(self, param):
-        print("Fractal_image...",end="\r")
+    def Fractal_image(self):
+        if self.param["verbose"]:
+            print("Fractal_image...",end="\r")
 
         ### Set param
-        frac_param=self.set_fractal_parameters(param)
+        frac_param=self.set_fractal_parameters(self.param)
 
-        if param["raster_image"]!="":
+        if self.param["raster_image"]!="":
             try:
-                orbit_form=np.array(PILIM.open(self.APP_DIR+"/orbit/"+param["raster_image"]+".png",).resize((frac_param["N"]+1,frac_param["N"]+1)).convert("L"),dtype=float)
+                orbit_form=np.array(PILIM.open(self.APP_DIR+"/orbit/"+self.param["raster_image"]+".png",).resize((frac_param["N"]+1,frac_param["N"]+1)).convert("L"),dtype=float)
             
             except:
-                print("Raster image",param["raster_image"],"not found. \nIf you do not want to use a raster image, set 'raster_image' parameters to ''.\n Else check the name of the image in the 'orbit' folder")
+                print("Raster image",self.param["raster_image"],"not found. \nIf you do not want to use a raster image, set 'raster_image' parameters to ''.\n Else check the name of the image in the 'orbit' folder")
 
         ### General type of Fractal
         if "RFA" in frac_param["method"]: #Root finding algorithm
@@ -149,7 +155,8 @@ class IMAGE():
                                                         lambda z: np.array([frac_obj.poly.dpoly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f'
                                                         tol=1.e-05,
                                                         max_steps=50,
-                                                        damping=complex(1,0.2))
+                                                        damping=complex(1,0.2),
+                                                        verbose = frac_param["verbose"],)
 
 
                 self.z,conv,dist=self.z.reshape(shape),conv.reshape(shape),dist.reshape(shape)
@@ -172,7 +179,8 @@ class IMAGE():
                                                     frac_param["tol"],
                                                     frac_param["itermax"],
                                                     frac_param["damping"],
-                                                    orbit_form=orbit_form)
+                                                    orbit_form=orbit_form,
+                                                    verbose = frac_param["verbose"],)
 
             
             elif "Halley" in frac_param["method"]:
@@ -183,7 +191,8 @@ class IMAGE():
                                                     frac_param["tol"],
                                                     frac_param["itermax"],
                                                     frac_param["damping"],
-                                                    orbit_form=orbit_form)
+                                                    orbit_form=orbit_form,
+                                                    verbose = frac_param["verbose"],)
 
             # Julia fractal
             elif "Julia" in frac_param["method"]:
@@ -194,30 +203,31 @@ class IMAGE():
                 pass
         
 
-        if param["shading"]:
+        if self.param["shading"]:
             normal=self.blinn_phong(normal,self.lights)
 
         self.z,conv,dist=self.z.real,conv.real,dist.real
         self.shaded=normal
-        frac_partial=binary_dilation((canny(conv)+sobel(conv*(-1))),iterations=1)+1e-02
+        self.frac_boundary=(canny(conv)+sobel(conv)*(-1) + canny(conv*(-1))+sobel(conv)) # +1e-02 to avoid division by 0
+        self.frac_boundary = np.where(self.frac_boundary>0,1,0)
         #Plot
-        if param["shading"]:
+        if self.param["shading"]:
             #self.Plot(normal,self.file_name,param["dir"],print_create=param["verbose"])
             #or
-            self.Plot(self.matplotlib_light_source(self.z*frac_partial),self.file_name,param["dir"],print_create=param["verbose"])
+            self.Plot(self.matplotlib_light_source(self.z*self.frac_boundary),self.file_name + "_shader2",self.param["dir"],print_create=self.param["verbose"])
 
         
-        if param["test"]:
-            #frac_partial=np.where(self.z<(frac_param["itermax"]-40),0,self.z)
-            self.Plot(self.shaded,self.file_name+"_shader",param["dir"],print_create=param["verbose"])
-            self.Plot(frac_partial,self.file_name+"_nobckg",param["dir"],print_create=param["verbose"])
-            self.Plot(frac_partial*normal,self.file_name+"_shader_nobckg",param["dir"],print_create=param["verbose"])
-            self.Plot(self.z,self.file_name+"_iter",param["dir"],print_create=param["verbose"])
+        if self.param["test"]:
+            #frac_boundary=np.where(self.z<(frac_param["itermax"]-40),0,self.z)
+            self.Plot(self.shaded,self.file_name+"_shader",self.param["dir"],print_create=self.param["verbose"])
+            self.Plot(self.frac_boundary,self.file_name+"_nobckg",self.param["dir"],print_create=self.param["verbose"])
+            self.Plot(self.frac_boundary*normal,self.file_name+"_shader_nobckg",self.param["dir"],print_create=self.param["verbose"])
+            self.Plot(self.z,self.file_name+"_iter",self.param["dir"],print_create=self.param["verbose"])
             
 
 
-
-        print("Fractal_image...Done")
+        if self.param["verbose"]:
+            print("Fractal_image...Done")
         return self.z
 
     def adaptive_antialiasing(self,param):
@@ -414,6 +424,7 @@ if __name__=='__main__':
 
         #Colors
         "color_list":["black","darkgrey","orange","darkred"],
+        "cmap":np.random.choice(cmap_dict), #for testing only
 
         #Shading
         "shading":True,

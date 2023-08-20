@@ -45,8 +45,7 @@ class Polynomials():
             else: #form=="coef" or form==None
                 #coefs by default
                 self.coefs=func
-                self.roots=self.coefficients_to_roots(self.coefs)
-        
+                self.roots=self.coefficients_to_roots(self.coefs)        
         
 
         ### POLYNOMIALS ###
@@ -168,7 +167,8 @@ class Polynomials():
 class RFA_fractal():
 
     def __init__(self, config, **kwargs):
-        print("Initializing RFA fractal...",end="\r")
+        if config["verbose"]:
+            print("Initializing RFA fractal...",end="\r")
         
         self.config = config
         self.__dict__.update(kwargs)
@@ -183,7 +183,8 @@ class RFA_fractal():
             up_treshold=0
             min_treshold=0
             while True:
-                print("Choose Polynomial...",end="\r")
+                if config["verbose"]:
+                    print("Choose Polynomial...",end="\r")
                 z=self.init_array(100,config["domain"])
 
 
@@ -208,12 +209,17 @@ class RFA_fractal():
                 count+=1
                 if count>25:
                     break
-            print("Choose Polynomial...Done",end="\n\n")
+            if config["verbose"]:
+                print("Choose Polynomial...Done",end="\n\n")
 
-            print("Gen_area",np.mean(gen_area))
-            print("Chosen roots:",np.around(self.poly.roots,2))
-            print("\n")
-
+                print("Gen_area",np.mean(gen_area))
+                print("Chosen roots:",np.around(self.poly.roots,2))
+                print("\n")
+        else:
+            if config["verbose"]:
+                print("Chosen roots:",np.around(self.poly.roots,2))
+                print("\n")
+        if config["verbose"]:
             print("Initializing RFA fractal...Done")
 
     def init_array(self,N,domain):
