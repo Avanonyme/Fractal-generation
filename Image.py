@@ -7,6 +7,7 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
+import matplotlib.cm as cm
 from PIL import Image as PILIM
 
 from scipy.ndimage import gaussian_filter,sobel,binary_dilation
@@ -53,15 +54,21 @@ class IMAGE():
         self.param=param
         self.dpi=param["dpi"]
         self.file_name=param["file_name"]
+        
         if param["clean_dir"]:
             clean_dir(self.IM_DIR)
-        if param["shading"]:
-            self.lights=param["lights"]
         
-        if param["cmap"] is None:
-            self.cmap=self.cmap_from_list(param["color_list"])
-        else:
-            self.cmap=matplotlib.cm.get_cmap(param["cmap"])
+
+        self.lights=param["shading"]["lights"] if param["shading"] is not None else None
+        
+        if "cmap" not in param.keys(): #if none or does not exist
+            try:
+                self.cmap_from_list(param["color_list"])
+            except KeyError:
+                print("If you do not specify a cmap, you must specify a color_list")
+                sys.exit()
+        
+        self.cmap=matplotlib.cm.get_cmap(param["cmap"]) #cmap object
     
     def set_fractal_parameters(self,param):
         frac_param={}
@@ -122,104 +129,100 @@ class IMAGE():
             frac_param["func"]=frac_obj.coefs
             self.func=frac_obj.coefs
 
+            ## Subtype of RFA Fractal - Method will be called in THIS loop
+            #NOT WORKING RN
+            if "Nova" in frac_param["method"]: # NO VARIATION OF METHOD FOR SUBTYPES YET
+                """
+                M-set fractal like with c-mapping
 
-        ## Subtype of Fractal - Method will be called in the loop
-        if "Nova" in frac_param["method"]: # NO VARIATION OF METHOD FOR SUBTYPES YET
-            """
-            M-set fractal like with c-mapping
+                Results are...experimental, and i cant be bothered to fix it
+                Use with caution
+                """
+                c=frac_obj.array #corresponding pixel to complex plane
+                shape=c.shape;c=c.flatten()
 
-            Results are...experimental, and i cant be bothered to fix it
-            Use with caution
-            """
-            c=frac_obj.array #corresponding pixel to complex plane
-            shape=c.shape;c=c.flatten()
+                c_coefs=frac_obj.poly.add_c_to_coefs(c,frac_param["func"],frac_param["random"],c_expression=lambda c: np.array([1,(c-1),c-1,1,1,1]))
 
-            c_coefs=frac_obj.poly.add_c_to_coefs(c,frac_param["func"],frac_param["random"],c_expression=lambda c: np.array([1,(c-1),c-1,1,1,1]))
+                #assuming that the c-length is on axis 0
+                print("Computing roots...",end="\r")
+                d2roots=np.empty(c_coefs.shape[0],dtype=complex)
+                for i in range(c_coefs.shape[0]):
+                    d2coefs=np.array([],dtype=complex)
+                    for k in range(2,len(c_coefs[i])):
+                        d2coefs=np.append(d2coefs,k*(k-1)*c_coefs[i,k])
+                    d2roots[i]=np.roots(d2coefs)[0]
+                print("Computing roots...Done")
 
-            #assuming that the c-length is on axis 0
-            print("Computing roots...",end="\r")
-            d2roots=np.empty(c_coefs.shape[0],dtype=complex)
-            for i in range(c_coefs.shape[0]):
-                d2coefs=np.array([],dtype=complex)
-                for k in range(2,len(c_coefs[i])):
-                    d2coefs=np.append(d2coefs,k*(k-1)*c_coefs[i,k])
-                d2roots[i]=np.roots(d2coefs)[0]
-            print("Computing roots...Done")
+            #print(d2roots.shape,c.shape) #should be equal
 
-        #print(d2roots.shape,c.shape) #should be equal
+                if "Newton" in frac_param["method"]:
 
-            if "Newton" in frac_param["method"]:
+                    self.z,conv,dist,normal=frac_obj.Newton_method(d2roots, #z0
+                                                            lambda z: np.array([frac_obj.poly.poly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f
+                                                            lambda z: np.array([frac_obj.poly.dpoly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f'
+                                                            tol=1.e-05,
+                                                            max_steps=50,
+                                                            damping=complex(1,0.2),
+                                                            verbose = frac_param["verbose"],)
 
-                self.z,conv,dist,normal=frac_obj.Newton_method(d2roots, #z0
-                                                        lambda z: np.array([frac_obj.poly.poly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f
-                                                        lambda z: np.array([frac_obj.poly.dpoly(z[i],c_coefs[i]) for i in range(len(c_coefs))]), #f'
-                                                        tol=1.e-05,
-                                                        max_steps=50,
-                                                        damping=complex(1,0.2),
+
+                    self.z,conv,dist=self.z.reshape(shape),conv.reshape(shape),dist.reshape(shape)
+
+                    self.z,conv,dist=self.z.real,conv.real,dist.real
+
+                    #Binary map
+                    frac_entire=binary_dilation(canny(conv),iterations=2)    
+
+            ## No subtype specified
+            else:
+                if "Newton" in frac_param["method"]: #Newton method
+                    self.z,conv,dist,normal=frac_obj.Newton_method(frac_obj.array,
+                                                        lambda z: frac_obj.poly.poly(z,frac_obj.coefs),
+                                                        lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),
+                                                        lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs),
+                                                        frac_param["tol"],
+                                                        frac_param["itermax"],
+                                                        frac_param["damping"],
+                                                        orbit_form=orbit_form,
                                                         verbose = frac_param["verbose"],)
 
-
-                self.z,conv,dist=self.z.reshape(shape),conv.reshape(shape),dist.reshape(shape)
-
-                self.z,conv,dist=self.z.real,conv.real,dist.real
-
-                #Binary map
-                frac_entire=binary_dilation(canny(conv),iterations=2)    
-
-    
-        
-        ## No subtype specified
-        else:
-            #RFA fractal
-            if "Newton" in frac_param["method"]: #Newton method
-                self.z,conv,dist,normal=frac_obj.Newton_method(frac_obj.array,
-                                                    lambda z: frac_obj.poly.poly(z,frac_obj.coefs),
-                                                    lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),
-                                                    lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs),
-                                                    frac_param["tol"],
-                                                    frac_param["itermax"],
-                                                    frac_param["damping"],
-                                                    orbit_form=orbit_form,
-                                                    verbose = frac_param["verbose"],)
-
-            
-            elif "Halley" in frac_param["method"]:
-                self.z,conv,dist,normal=frac_obj.Halley_method(frac_obj.array,
-                                                    lambda z: frac_obj.poly.poly(z,frac_obj.coefs),
-                                                    lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),
-                                                    lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs),
-                                                    frac_param["tol"],
-                                                    frac_param["itermax"],
-                                                    frac_param["damping"],
-                                                    orbit_form=orbit_form,
-                                                    verbose = frac_param["verbose"],)
+                
+                elif "Halley" in frac_param["method"]:
+                    self.z,conv,dist,normal=frac_obj.Halley_method(frac_obj.array,
+                                                        lambda z: frac_obj.poly.poly(z,frac_obj.coefs),
+                                                        lambda z: frac_obj.poly.dpoly(z,frac_obj.coefs),
+                                                        lambda z: frac_obj.poly.d2poly(z,frac_obj.coefs),
+                                                        frac_param["tol"],
+                                                        frac_param["itermax"],
+                                                        frac_param["damping"],
+                                                        orbit_form=orbit_form,
+                                                        verbose = frac_param["verbose"],)
+            #throw away imaginary part
+            self.z,conv=self.z.real,conv.real
 
             # Julia fractal
-            elif "Julia" in frac_param["method"]:
+        elif "Julia" in frac_param["method"]:
                 pass
                 
             #Mandelbrot fractal
-            elif "Mandelbrot" in frac_param["method"]:
+        elif "Mandelbrot" in frac_param["method"]:
                 pass
-        
 
-        if self.param["shading"]:
-            normal=self.blinn_phong(normal,self.lights)
-
-        self.z,conv,dist=self.z.real,conv.real,dist.real
-        self.shaded=normal
+        #Edge detection
         self.frac_boundary=(canny(conv)+sobel(conv)*(-1) + canny(conv*(-1))+sobel(conv)) # +1e-02 to avoid division by 0
         self.frac_boundary = np.where(self.frac_boundary>0,1,0)
-        #Plot
-        if self.param["shading"]:
-            #self.Plot(normal,self.file_name,param["dir"],print_create=param["verbose"])
-            #or
-            self.Plot(self.matplotlib_light_source(self.z*self.frac_boundary),self.file_name + "_shader2",self.param["dir"],print_create=self.param["verbose"])
 
-        
+        #Shading
+        if self.param["shading"] == "blinn_phong":
+            self.shade=self.blinn_phong(normal,self.lights)
+        elif self.param["shading"] == "matplotlib":
+            self.shade=self.matplotlib_light_source(self.z,self.lights)
+        elif self.param["shading"] == "fossil":
+            self.shade=self.matplotlib_light_source(self.z*self.frac_boundary,self.lights)
+
+        #Plot
         if self.param["test"]:
-            #frac_boundary=np.where(self.z<(frac_param["itermax"]-40),0,self.z)
-            self.Plot(self.shaded,self.file_name+"_shader",self.param["dir"],print_create=self.param["verbose"])
+            self.Plot(self.shade,self.file_name+"_shader",self.param["dir"],print_create=self.param["verbose"])
             self.Plot(self.frac_boundary,self.file_name+"_nobckg",self.param["dir"],print_create=self.param["verbose"])
             self.Plot(self.frac_boundary*normal,self.file_name+"_shader_nobckg",self.param["dir"],print_create=self.param["verbose"])
             self.Plot(self.z,self.file_name+"_iter",self.param["dir"],print_create=self.param["verbose"])
@@ -230,41 +233,40 @@ class IMAGE():
             print("Fractal_image...Done")
         return self.z
 
-    def adaptive_antialiasing(self,param):
-        pass
     ############RENDERING#################
     ### COLORS ###
-    def cmap_from_list(self,color_list):
+    def cmap_from_list(self,color_list, cmap_name="cmap"):
         """ Create a colormap from a list of colors
 
         Args:
-            colors (list): list of colors
+            colors (list): list of colors RGBA or RGB
 
         Returns:
             matplotlib.colors.ListedColormap: colormap
         """
-        cmap=colors.LinearSegmentedColormap.from_list("cmap",color_list)
-        #plt.cm.get_cmap(cmap, len(color_list)
-        return plt.cm.viridis
+        cmap=colors.LinearSegmentedColormap.from_list(cmap_name,color_list)
+        cm.register_cmap(name=cmap, cmap=cmap)
+
+        return cmap
     
-    def z_to_pixel_transfer_function(self,options:str, **kwargs):
-        """ Transfer function from z to pixel
+    def apply_colormap_with_alpha(arr, cmap_name):
+        """
+        Apply a colormap to a 2D array with an alpha channel.
 
         Args:
-            options (str): options for the transfer function
-            Linear, Sqrt, Exp, Log, Sin, Atan, Atanh
+            arr (np.ndarray): 2D array of values
+            cmap_name (str): name of a colormap
+
         Returns:
-            float: pixel value
+            np.ndarray: 3D array of RGBA values
         """
-        index_val=self.z
+        normed_data = (arr - np.min(arr)) / (np.max(arr) - np.min(arr)) # Normalize the array
+        mapped_colors = plt.cm.get_cmap(cmap_name)(normed_data) # Apply the colormap by name
+        mapped_data = (mapped_colors * 255).astype(np.uint8) # Convert to RGBA and scale to 0-255
+        return mapped_data
 
-        ...
-
-        self.z=index_val
-        
-
-    ### SHADERS ###
-    def matplotlib_light_source(self,array,light=(315,20,1.5,1.2),blend_mode='hsv'):
+     ### SHADERS ###
+    def matplotlib_light_source(self,array,light=(315,20,1.5,1.2),**kwargs):
         """ Create a matplotlib light source
 p
         Args:
@@ -274,10 +276,11 @@ p
         Returns:
             matplotlib.colors.LightSource: light source
         """
-        lightS = colors.LightSource(azdeg=light[0], altdeg=light[1])
-        array = lightS.shade(array, cmap=self.cmap, vert_exag=light[2],
-                    norm=colors.PowerNorm(0.3), blend_mode=blend_mode,fraction=light[3])
+
+        lightS = colors.LightSource(azdeg=light[0], altdeg=light[1], **kwargs)
+        array = lightS.shade(array, cmap=self.cmap, vert_exag=light[2],fraction=light[3],**kwargs)
         return array
+    
     def blinn_phong(self,normal, light):
         """ Blinn-Phong shading algorithm
     
@@ -336,18 +339,6 @@ p
         """Local treshold filter"""
         return array>threshold_local(array)
     
-    def forces(self,array,param):
-        """
-         This uses the Mosaic algorithm to sprinkle the image
-         with "force points" which attract or repel pixels in
-         the image. For any given pixel, its final location is
-         the sum of all the forces acting on it. You cannot place
-         force points manually; they are placed by the same
-         algorithm which places mosaic tile centers.
-
-        """
-
-
     ### BLENDING ###
 
     ### POST-IMAGE HANDLER ###

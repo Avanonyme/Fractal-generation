@@ -7,6 +7,7 @@ import imageio
 
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 
 cmap_dict = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
                 'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
@@ -24,13 +25,30 @@ param={
         "test":True, #for trying stuff and knowing where to put it
         "media_form":"image", #image or video
 
+        "end_dir": "images", #where to put final results
+        "temp_dir": "images", #where to put temporary results
+
         #### Video parameters
-        "anim method":"explosion", #pulsing, zoom, translation, rotation
-        "frame_number":1,
-        "frame_size": 2160,
+        "anim method":"explosion zoom", #pulsing, zoom, translation, flicker, explosion
+
+        # Frame parameters
         "fps":20 ,
         "duration":3, #seconds
-        "zoom":1.02, #if animation method is zoom 
+        "nb_frames": None, #number of frames, if None, duration and fps are used
+
+        "pulsing_param": {"beta": 0.5,
+                          "decal": 0},
+        "translation_param": {"init_damp_r" : 0.4, 
+                              "end_damp_r" : 1.35, 
+                              "init_damp_c" : -0.5, 
+                              "end_damp_c" : 0.85},
+        "flicker_param": {"flicker_percentage" : 0.0005,
+                          "on_fractal" : False, 
+                          "dilation_size" : 2,
+                          "flicker_amplitude" : 0.9},
+        "explosion_param": {"border_thickness": 200,
+                            "hole_size": 3},
+        "zoom_param": {"zoom_speed":1.02},
         #### Image parameters
         #General
         "dir": "images",
@@ -43,24 +61,32 @@ param={
         "cmap":np.random.choice(cmap_dict), #for testing only
 
         #Shading
-        "shading":True,
-        "lights": (45., 0, 40., 0, 0.5, 1.2, 1),
-        #Filters
+        "shading": {"type": "blinn-phong", #None, matplotlib, blinn-phong, fossil
+                    "lights": (45., 0, 40., 0, 0.5, 1.2, 1),  # (azimuth, elevation, opacity, k_ambiant, k_diffuse, k_spectral, shininess) for blinn-phong
+                                                                  # (azimuth, elevation, vert_exag, fraction) for matplotlib
+                    "blend_mode": "hsv",
+                    "norm": colors.PowerNorm(0.3),     
+                         },
 
         #### Fractal parameters
         "method": "RFA Newton",
         "size": 500,
         "domain":np.array([[-1,1],[-1,1]]),
-        ## RFA paramters
+        ## RFA parameters
         "random":True,
-        # Polynomial parameters (Must have value if random==False)
-        "degree": 5, #random.randint(5,20),
-        "func": [0.58+1.02j, -1.09-0.24j,  0.58-1.02j, -1.09+0.24j],#[1,-1/2+np.sqrt(3)/2*1j,-1/2-np.sqrt(3)/2*1j,1/2+np.sqrt(3)/2*1j,1/2-np.sqrt(3)/2*1j], 
-        "form": "root", #root, coefs, taylor_approx
 
+        # Polynomial parameters (Must have value if random==False)
+        "degree": 5, #degree of the polynomial
+        "func": None,
+        "form": "root", #root, coefs, taylor_approx
         "distance_calculation": 4, #see options of get_distance function in RFA_fractals.py
         
-        #Method parameters
+        ## Julia parameters
+
+        ## Mandelbrot parameters
+
+        ## Method parameters
+        #Newton, Halley
         "itermax":50,
         "tol":1e-6,
         "damping":complex(1.01,-.01),

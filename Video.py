@@ -17,6 +17,8 @@ from skimage.morphology import disk,dilation
 import time
 from Image import IMAGE
 
+import imageio
+
 def clean_dir(folder):
     import shutil
     print("Cleaning directory '% s'..." %folder)
@@ -57,14 +59,11 @@ class VIDEO():
     def set_video_parameters(self,param):
         self.fps=param["fps"]
         self.seconds=param["duration"]
-
-        self.frame_name=0
-
-
-        self.zoom=1
-        self.zoom_speed=param["zoom"]
+        self.nb_frames = param["nb_frames"]
 
         self.frac_boundary = []
+
+        self.verbose = param["verbose"]
 
 
     ## ARRAY HANDLING
@@ -85,30 +84,45 @@ class VIDEO():
         return mask
     
     ### VIDEO MAKER ###
-    def Video_maker(self,param):
+    def Video_maker(self,param, im_path_2=None, **kwargs):
         print("Video maker (V-vm)...",end="")
 
-        #Copy frame dir to Desktop
-        from time import strftime,gmtime
-        import shutil
-        dt_gmt = strftime("%Y_%m_%d_%H_%M_%S", gmtime())
+        anim = param["anim"]
 
-        src_dir=self.FRAME_DIR
-        dest_dir=os.path.join(self.APP_DIR,f"video/video_{dt_gmt}")
-        shutil.copytree(src_dir, dest_dir)
+        #inputs: param
+        if "zoom" and "translate" in anim:
+            frame_list = self.Zoom_and_Translate(param, zoom = True, translate = True)
+        elif "zoom" in anim:
+            frame_list = self.Zoom_and_Translate(param, zoom = True, translate = False)
+        elif "translate" in anim:
+            frame_list = self.Zoom_and_Translate(param, zoom = False, translate = True)
+        else:
+            img_obj = IMAGE(param)
+            frame_list = img_obj.Fractal_image()
+            self.frac_boundary = img_obj.frac_boundary
+        #outputs: frame_list
 
-        #Create video
-        #self.Create_video(dest_dir,param["FPS"])
+        # inputs: image or frame_list
+        if "grain" in anim:
+            self.Grain_anim(frame_list)
+        if "pulsing" in anim:
+            self.Pulsing(frame_list,self.frac_boundary, param["pulsing"])
+        if "flicker" in anim:
+            self.Flicker(frame_list,)
+        # outputs: frame_list
+
+        # make video
         
         print("Done (V-vm)")
 
     ### ANIMATIONS ###
-    def Grain_anim(self,im_path,im_path_2=None, **kwargs):
+    def Grain_anim(self,img_obj,im_path_2=None, **kwargs):
         '''Generate explosion animation of input image, with rotational grain effect and flickering
-        im_path: path of image to explode
+        img_obj: image or images to be animated
         im_path_2 (optionnal): put explosion on top of this image
         '''
-        def deteriorate_border_anim(img, border_thickness=200, hole_size=3, n_frames=100):
+
+        def deteriorate_border_anim(img, border_thickness=200, hole_size=3, n_frames=300):
             """
             Apply granular gfilter to an image
 
@@ -236,25 +250,24 @@ class VIDEO():
 
             print('deterioate border anim done')
             return frame_list
-    
+
+        # get the parameters
+        border_thickness = kwargs.get('border_thickness', 200)
+        hole_size = kwargs.get('hole_size', 3)
+        n_frames = kwargs.get('n_frames', 300)
+        log_base = kwargs.get('log_base', 7)
+        inf_size = kwargs.get('inf_size', (1,1))
         #explosion
-        self.EX_DIR=os.path.join(self.VID_DIR,"explosion")
-        clean_dir(self.EX_DIR)
-        try:
-            os.mkdir(self.EX_DIR)
-        except:
-            pass
-
-        image=PILIM.open(im_path)
-
         #Explosion is resizing of image w/ filter
-        inf_size=(1,1)
-        sup_size=(image.size[0],image.size[1])
-        list_ex=((np.arange(inf_size[0],np.sqrt(sup_size[0])))**2).astype(int)
+        if isinstance(img_obj,list):
+            sup_size=(img_obj[0].size[0],img_obj[0].size[1])
+        else:
+            sup_size=(img_obj.size[0],img_obj.size[1])
+        list_ex=np.clip((np.logspace(np.log(inf_size[0]),np.log(sup_size[0]),num = 300, base = log_base)).astype(int),1,sup_size[0])
         list_ex=np.append(np.unique(list_ex),sup_size[0])
 
         #Create frames
-        frame_list = deteriorate_border_anim(image,**kwargs)
+        frame_list = deteriorate_border_anim(img_obj, border_thickness=border_thickness, hole_size=hole_size, n_frames=n_frames)
         
         # Apply resizing explosion
             #match size of explosion to size of image
@@ -265,7 +278,7 @@ class VIDEO():
         
         return frame_list
     
-    def Flicker(self,img_input,flicker_percentage=0.0005,on_fractal=False, dilation_size = 2,flicker_amplitude=0.9, n_frames=300):
+    def Flicker(self,img_obj,**kwargs):
         """
         Apply a flicker animation to an image
 
@@ -273,21 +286,30 @@ class VIDEO():
         
         flicker_amplitude: the amplitude of the flicker effect 
         flicker_percentage: the percentage of pixels to flicker
+        dilation_size: the size of the dilation kernel
         n_frames: the number of frames in the animation (single image only)
         on_fractal: whether to apply the flicker on the fractal or everywhere
 
         return: a list of numpy arrays of shape [frames,(height, width, 3)]
         """
-        print("Flicker animation...", end="")
+        # Get the parameters
+        dilation_size = kwargs.get("dilation_size", 2)
+        flicker_amplitude = kwargs.get("flicker_amplitude", 0.9)
+        flicker_percentage = kwargs.get("flicker_percentage", 0.0005)
+        n_frames = kwargs.get("n_frames", 300)
+        on_fractal = kwargs.get("on_fractal", False)
+
+        if self.verbose:
+            print("Flicker animation...", end="")
         # We'll store each frame as we create it
         frames = []
         # Calculate the total number of pixels
-        if isinstance(img_input,list):
-            total_pixels = img_input[0].shape[0] * img_input[0].shape[1]
-            width,height=img_input[0].shape[0],img_input[0].shape[1]
+        if isinstance(img_obj,list):
+            total_pixels = img_obj[0].shape[0] * img_obj[0].shape[1]
+            width,height=img_obj[0].shape[0],img_obj[0].shape[1]
         else: 
-            total_pixels = img_input.shape[0] * img_input.shape[1]
-            width,height=img_input.shape[0],img_input.shape[1]
+            total_pixels = img_obj.shape[0] * img_obj.shape[1]
+            width,height=img_obj.shape[0],img_obj.shape[1]
         num_flicker_pixels = int(total_pixels * flicker_percentage)
 
         # Generate the indices of the pixels to flicker
@@ -311,7 +333,7 @@ class VIDEO():
         # Apply flicker effect on fractal only, if specified
         if on_fractal:
 
-            fractal_mask=np.asarray(PILIM.open("images/test0_nobckg.png").convert("L"))/255
+            fractal_mask=self.frac_boundary
             fractal_mask = np.where(fractal_mask>0.5,1,0)
 
             mask_start*=fractal_mask
@@ -323,9 +345,9 @@ class VIDEO():
         
         pulse_func=lambda x: (smooth_step(np.mod(x,1.5),-4,0.6)-smooth_step(np.mod(x,1.5),-5-1/3,0.8))/0.006821  #experimentally determined (lol)
 
-        if isinstance(img_input,list): #multiple images
+        if isinstance(img_obj,list): #multiple images
             i = 0
-            for img_array in img_input:
+            for img_array in img_obj:
                 img_array = img_array.copy()
                 # Create a multiplier that goes between 1-flicker_amplitude and 1+flicker_amplitude
                 # We use a function to create a smooth flicker effect
@@ -347,7 +369,7 @@ class VIDEO():
                 # Convert the numpy array back to a PIL Image and append it to the frames list
                 frames.append(np.uint8(img_array))
 
-                i+=1/len(img_input)
+                i+=1/len(img_obj)
             
         else: #single image
 
@@ -358,17 +380,17 @@ class VIDEO():
                 # We use a function to create a smooth flicker effect
                 flicker_multiplier = np.array((1 + flicker_amplitude * pulse_func(mask_start * i / num_frames+1.5)))[mask]
 
-                if img_input.shape[-1]==4:
+                if img_obj.shape[-1]==4:
                     #RGBA
                     flicker_multiplier = np.repeat(flicker_multiplier[:, np.newaxis], 4, axis=1)
-                elif img_input.shape[-1]==3:
+                elif img_obj.shape[-1]==3:
                     #RGB
                     flicker_multiplier = np.repeat(flicker_multiplier[:, np.newaxis], 3, axis=1)
                 else:
                     #L
                     pass
                 # copy the array so we don't overwrite the original
-                img_array = img_input.copy()
+                img_array = img_obj.copy()
 
                 # apply the flicker effect
                 img_array[mask] = np.clip(img_array[mask] * flicker_multiplier,0,200)
@@ -376,18 +398,31 @@ class VIDEO():
                 # Convert the numpy array back to a PIL Image and append it to the frames list
                 frames.append(np.uint8(img_array))
 
-        print("flicker anim done")
+        if self.verbose:
+            print("flicker anim done")
 
         return frames
 
-    def Pulsing(img_obj,fractal_bounds,beta=None,decal=0,**kwargs):
+    def Pulsing(self,img_obj,fractal_bounds,**kwargs):
         """ 
         Create a pulsing animation of the fractal image
 
         img_obj: single array or list of arrays
         frac_boundary: array of the fractal boundary, if None, it is img_obj.frac_boundary (img_obj must be an IMAGE object)
+
+        kwargs
+        beta: damping coefficient for oscillations
+        decal: number of pixels to add to the image to avoid the animation to be cut when saving as GIF
+        cmap: colormap to use for the animation
         """
-        print("Pulsing...")
+        # get the parameters
+        beta = kwargs.get("beta",-0.3)
+        decal = kwargs.get("decal",0)
+        cmap = kwargs.get("cmap","gray")
+
+        if self.verbose:
+            print("Pulsing...")
+
         def f(u,beta = -0.03):
             #beta = -0.03  # Damping coefficient for oscillations
             omega = 2*np.pi # Frequency of oscillations
@@ -439,25 +474,69 @@ class VIDEO():
                 wave_im = (((Psi * Mask) * fractal_bounds[step] * 255)).astype(np.uint8)
 
                 img_obj[step] = (img_obj[step] * 255/np.max(img_obj[step]))
-                plt.imsave(f"images/pulse.png", wave_im + img_obj[step]//3, vmin=0, vmax=255, **kwargs)
+                plt.imsave(f"images/pulse.png", wave_im + img_obj[step]//3, vmin=0, vmax=255, cmap = cmap, **kwargs)
             else: #single image
                 wave_im = (((Psi * Mask) * fractal_bounds * 255)).astype(np.uint8)
                 
                 img = (img * 255/np.max(img)) # image always appears
                 #or
                 #img /= np.max(img) # image appears with wave
-                plt.imsave(f"images/pulse.png", wave_im + img//2, vmin=0, vmax=255, **kwargs)
+                plt.imsave(f"images/pulse.png", wave_im + img//2, vmin=0, vmax=255, cmap = cmap,**kwargs) #let matplotlib handle the coloring
             
             wave_im = PILIM.open(f"images/pulse.png").resize(img.shape)
             wave_im = np.asarray(wave_im)
 
             frame_array.append(wave_im)
-            print("  ",step,"/",max_t,np.max(Psi) ,end="\r")
-        print("Pulsing done")
+            if self.verbose:
+                print("  ",step,"/",max_t,np.max(Psi) ,end="\r")
+        if self.verbose:
+            print("Pulsing done")
         return frame_array
-    #Zoom
-    def Zoom(self,param):
+
+    def Zoom_and_Translate(self,param, zoom = True, translate = False, **kwargs):
+        """
+        Create a zoom and/or complex translation animation of the fractal image
+        
+        param: dict of the parameters of the fractal
+        zoom: boolean, if True, zoom in the fractal
+        translate: boolean, if True, translate the fractal
+
+        kwargs
+        init_damp_r: initial damping coefficient for oscillations
+        end_damp_r: final damping coefficient for oscillations
+        init_damp_c: initial complex damping coefficient for oscillations
+        end_damp_c: final complex damping coefficient for oscillations
+        
+        """
+        if self.verbose:
+            print("(Vm-Zoom_and_Translate)...")
+            if zoom:
+                print("Zooming...",end=" ")
+            if translate:
+                print("Translating...")
+        # get the parameters
+        init_damp_r = kwargs.get("init_damp_r",0.4)
+        end_damp_r = kwargs.get("end_damp_r",1.35)
+        init_damp_c = kwargs.get("init_damp_c",-0.5)
+        end_damp_c = kwargs.get("end_damp_c",0.85)
+
+        zoom_speed = kwargs.get("zoom_speed",1.1)
+
+
+        nb_frames = self.fps*self.seconds if self.nb_frames is None else self.nb_frames
+        if self.nb_frames is not None:
+            self.fps = 20
+            self.seconds = self.nb_frames//self.fps
+
+
+        # we'll save the frames in a list
         frame_list = []
+
+        # get damping list from the parameters
+        if translate == True:
+            damping_list=np.linspace(init_damp_r,end_damp_r,self.fps*self.seconds+1)+np.linspace(init_damp_c,end_damp_c,self.fps*self.seconds+1)*1j
+            param["damping"]=damping_list[0]
+
         def check_coord(z,edges,dpi,coord,zoom,prev_point):
             #init old coord
             array=self.init_array(dpi,coord)
@@ -479,51 +558,37 @@ class VIDEO():
                         [(pts[1])-1*zoom,(pts[1])+1*zoom]]) #complex
             return coord,point
         
-        start_time =  time.time()
-        for _ in range(self.fps*self.seconds):
-            print("  ",_,end="")
+        #loop over frames
+        for _ in range(nb_frames):
+        # num_frames is self.fps*self.seconds
+            if self.verbose:
+                print(" ",_,end="\r")
             #Create frame
             Imobj=IMAGE(param) 
             im = Imobj.Fractal_image()
 
+            # update parameters
+            #_==0
+            if _ == 0:
+                param["form"]=None
+                param["random"]=False #True only for first frame at most
+                param["pts"] = [0,0]
+
+
             param["func"]= Imobj.func
-            param["form"]=None
-            param["random"]=False #True only for first frame at most
-            param["verbose"]=False
-            param["pts"] = [0,0]
+
+            if zoom == True:
+                zoom_speed = 1/zoom_speed
+                param["domain"],param["pts"]=check_coord(im,Imobj.frac_boundary,param["dpi"],param["domain"],zoom_speed,prev_point=param["pts"])
+            if translate == True:
+                param["damping"]=damping_list[_]
+            
             #save frame
+
             self.frac_boundary.append(Imobj.frac_boundary)
             frame_list.append(im)
-
-            # update zoom
-            self.zoom = self.zoom/self.zoom_speed
-            param["domain"],param["pts"]=check_coord(im,Imobj.frac_boundary,param["dpi"],param["domain"],self.zoom,prev_point=param["pts"])
-
-            end_time = time.time()
-            if _ == 0:
-                total_time = (end_time-start_time)*self.fps*self.seconds
-            print("  progress: ",np.around((end_time-start_time),2),"/",total_time, "time left: ",np.around((total_time - np.around((end_time-start_time),2))/60,2),"min",end = "\r")
-            #param["domain"]=param["domain"]*self.zoom
-        return frame_list
-
-    def Translate(self, param, init_damp_r = 0.4, end_damp_r = 1.35, init_damp_c = -0.5, end_damp_c = 0.85):
-        frame_list = []
-        damping_list=np.linspace(init_damp_r,end_damp_r,self.fps*self.seconds+1)+np.linspace(init_damp_c,end_damp_c,self.fps*self.seconds+1)*1j
-        param["damping"]=damping_list[0]
-
-        for _ in range(self.fps*self.seconds):
-            print(_,end="\r")
-
-            #Create frame
-            Imobj=IMAGE(param) 
-            im = Imobj.Fractal_image(param)
-            param["func"]=Imobj.func
-
-            param["random"] = False
-            param["damping"]=damping_list[_]
-            #save frame
-            frame_list.append(im)
-
+        if self.verbose:
+            print("Done (Vm Zoom_and_Translate)")
         return frame_list
     
 if __name__=='__main__':
@@ -588,7 +653,7 @@ if __name__=='__main__':
 }
 
     try:
-        obj=Videos(param)
+        obj=VIDEO(param)
         obj.Video_maker(param)
 
     except KeyboardInterrupt:
