@@ -22,39 +22,54 @@ param={
         #### General parameters
         "clean_dir":False, #clean image dir before rendering
         "verbose":True, #print stuff
-        "test":True, #for trying stuff and knowing where to put it
+        "test":True, #for trying stuff and knowing where t====o put it
         "media_form":"image", #image or video
 
         "end_dir": "images", #where to put final results
         "temp_dir": "images", #where to put temporary results
 
         #### Video parameters
-        "anim method":"explosion zoom", #pulsing, zoom, translation, flicker, explosion
+        "anim method":"explosion zoom", #pulsing, zoom, translation, flicker, explosion, grain
 
         # Frame parameters
         "fps":20 ,
-        "duration":3, #seconds
+        "duration":20, #seconds
         "nb_frames": None, #number of frames, if None, duration and fps are used
 
-        "pulsing_param": {"beta": 0.5,
-                          "decal": 0},
+        # Animation parameters
+        "explosion_param": {"explosion_speed": 45, #log base
+                            "start_size": (1,1), #start size in pixels
+                            },
+        "pulsing_param": {"beta":-0.002, #if None, -25/size
+                          "decal": 0,
+                          "oscillation_frequency":np.pi/50,
+                          "oscillation_amplitude": 10,
+                          "c": 3,
+                          
+                          },
         "translation_param": {"init_damp_r" : 0.4, 
-                              "end_damp_r" : 1.35, 
+                              "end_damp_r" : 1.25, 
                               "init_damp_c" : -0.5, 
-                              "end_damp_c" : 0.85},
-        "flicker_param": {"flicker_percentage" : 0.0005,
-                          "on_fractal" : False, 
+                              "end_damp_c" : 0.75},
+        "flicker_param": {"flicker_percentage" : 0.005,
+                          "on_fractal" : True, 
                           "dilation_size" : 2,
-                          "flicker_amplitude" : 0.9},
-        "explosion_param": {"border_thickness": 200,
-                            "hole_size": 3},
-        "zoom_param": {"zoom_speed":1.02},
+                          "flicker_amplitude" : 2},
+        "grain_param": {"border_thickness": 500,
+                        "hole_size": np.ones((2,2)),
+                        "distance_exponent_big": 0.6,
+                        "distance_exponent_small": 0.6,
+                        "nb_rotation":2,
+                        },
+        "zoom_param": {"zoom_speed":1.02,
+                       
+                       },
         #### Image parameters
         #General
         "dir": "images",
         "file_name": f"test0",
         "raster_image":np.random.choice(raster_image_list), # if None, raster image is np.zeros((size,size))
-        "dpi":500,
+        "dpi":1000,
 
         #Colors
         "color_list":["black","darkgrey","orange","darkred"],
@@ -62,15 +77,16 @@ param={
 
         #Shading
         "shading": {"type": "blinn-phong", #None, matplotlib, blinn-phong, fossil
-                    "lights": (45., 0, 40., 0, 0.5, 1.2, 1),  # (azimuth, elevation, opacity, k_ambiant, k_diffuse, k_spectral, shininess) for blinn-phong
-                                                                  # (azimuth, elevation, vert_exag, fraction) for matplotlib
+                    "lights": (45., 0, 40., 0, 0.5, 1.2, 1),  # (azimuth, elevation, opacity, k_ambiant, k_diffuse, k_spectral, shininess) for blinn-phong (45., 0, 40., 0, 0.5, 1.2, 1)
+                                                                  # (azimuth, elevation, vert_exag, fraction) for matplotlib and fossil (315,20,1.5,1.2)
                     "blend_mode": "hsv",
                     "norm": colors.PowerNorm(0.3),     
+                    "nb_rotation": 0.5, #for Dynamic_shading anim
                          },
 
         #### Fractal parameters
         "method": "RFA Newton",
-        "size": 500,
+        "size": 1000,
         "domain":np.array([[-1,1],[-1,1]]),
         ## RFA parameters
         "random":True,
@@ -87,7 +103,63 @@ param={
 
         ## Method parameters
         #Newton, Halley
-        "itermax":50,
-        "tol":1e-6,
+        "itermax":20,
+        "tol":1e-8,
         "damping":complex(1.01,-.01),
 }
+
+if __name__ == "__main__":
+
+    sdir = "test/"
+
+    print("cmap", param["cmap"])
+    #create video object
+    video = VIDEO(param)
+
+    #print("begin zoom")
+    #frame_list = video.Zoom_and_Translate(param,anim="zoom",**param["zoom_param"])
+    #print("saving zoom")
+    #imageio.mimsave(sdir+"zoom.gif",frame_list,fps=20)
+
+    #print("begin translate")
+    #frame_list = video.Zoom_and_Translate(param,anim = "translate",**param["translation_param"])
+    #print("saving translate")
+    #imageio.mimsave(sdir+"translate.gif",frame_list,fps=20)
+
+    #create image object
+    image = IMAGE(param)
+    frame_list = image.Fractal_image()
+    video.frac_boundary.append(image.frac_boundary)
+
+    #print("begin zoom and dynamic shading")
+    #frame_list = video.Zoom_and_Translate(param,anim = "zoom translate shading",**param["zoom_param"],**param["shading"],**param["translation_param"])
+    #print(frame_list[0].shape)
+    
+    #print("begin flicker")
+    #frame_list = video.Flicker(frame_list ,**param["flicker_param"])
+    #print(frame_list[0].shape)
+    #imageio.mimsave(sdir+"flicker.gif",frame_list,fps=20)
+
+    #frame_list = video.Pulsing(frame_list ,video.frac_boundary,**param["pulsing_param"])
+    #print(frame_list[0].shape)
+    #print("begin grain")
+    #frame_list = video.Grain(frame_list,**param["grain_param"])
+    #print(frame_list[0].shape)
+    #imageio.mimsave(sdir+"all_anim.gif",frame_list,fps=20)
+    #print("begin pulsing")
+
+
+    #imageio.mimsave(sdir+"pulsing.gif",frame_list,fps=20)
+
+    #print("day passing")
+    #frame_list = video.Day_passing(image, **param["shading"])
+    #print("saving day passing")
+    #imageio.mimsave(sdir+"day_passing.gif",frame_list,fps=20)
+
+    #print("begin explosion")
+    #frame_list = video.Explosion(frame_list, **param["explosion_param"])
+    #print("saving explosion")
+    #imageio.mimsave(sdir+"explosion.gif",frame_list,fps=20)
+
+        # create a new figure (RGB with cmap, A with img_alpha)
+                

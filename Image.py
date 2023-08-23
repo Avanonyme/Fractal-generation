@@ -32,13 +32,13 @@ def clean_dir(folder,verbose=False):
             print('Failed to delete %s. Reason: %s' % (file_path, e))
 
 class IMAGE():
-    ### SET PARAM^ ###
+    ### SET PARAM###
     def __init__(self,param) -> None:
         if param["verbose"]:
             print("Init Image class...",end="\r")
         ### Create folders
         self.APP_DIR = os.path.dirname(os.path.abspath(__file__))
-        self.IM_DIR=os.path.join(self.APP_DIR,param["dir"])
+        self.IM_DIR=os.path.join(self.APP_DIR,param["temp_dir"])
 
         try: os.mkdir(self.IM_DIR)
         except: pass#print(f"Could not create folder {self.IM_DIR}" )
@@ -63,12 +63,14 @@ class IMAGE():
         
         if "cmap" not in param.keys(): #if none or does not exist
             try:
-                self.cmap_from_list(param["color_list"])
+                self.cmap=self.cmap_from_list(param["color_list"])
             except KeyError:
                 print("If you do not specify a cmap, you must specify a color_list")
                 sys.exit()
+        else:
+            self.cmap = param["cmap"]
         
-        self.cmap=matplotlib.cm.get_cmap(param["cmap"]) #cmap object
+        #self.cmap=matplotlib.cm.get_cmap(param["cmap"]) #cmap object
     
     def set_fractal_parameters(self,param):
         frac_param={}
@@ -93,12 +95,13 @@ class IMAGE():
     ### PLOT ###
     def Plot(self,array,name,Dir,print_create=True,**kwargs):
         """Plot a numpy array as an image"""
+        array = array.real
         fig = plt.figure(frameon=False)
         fig.set_size_inches(1,1)    
         ax = plt.Axes(fig, [0., 0., 1., 1.])
         ax.set_axis_off()
         fig.add_axes(ax)
-        array = (array * 255/array.max()).astype(np.uint8)
+        array = ((array - np.min(array)) / (np.max(array) - np.min(array)) * 255).astype(np.uint8)
         ax.imshow(array,cmap=self.cmap,**kwargs,vmin=0,vmax=255)
 
         fig.savefig(Dir+"/"+name,dpi=self.dpi) 
@@ -213,19 +216,20 @@ class IMAGE():
         self.frac_boundary = np.where(self.frac_boundary>0,1,0)
 
         #Shading
-        if self.param["shading"] == "blinn_phong":
+        if self.param["shading"]["type"] == "blinn-phong":
             self.shade=self.blinn_phong(normal,self.lights)
-        elif self.param["shading"] == "matplotlib":
+        elif self.param["shading"]["type"] == "matplotlib":
             self.shade=self.matplotlib_light_source(self.z,self.lights)
-        elif self.param["shading"] == "fossil":
+        elif self.param["shading"]["type"] == "fossil":
             self.shade=self.matplotlib_light_source(self.z*self.frac_boundary,self.lights)
+        self.normal = normal
 
         #Plot
         if self.param["test"]:
-            self.Plot(self.shade,self.file_name+"_shader",self.param["dir"],print_create=self.param["verbose"])
-            self.Plot(self.frac_boundary,self.file_name+"_nobckg",self.param["dir"],print_create=self.param["verbose"])
-            self.Plot(self.frac_boundary*normal,self.file_name+"_shader_nobckg",self.param["dir"],print_create=self.param["verbose"])
-            self.Plot(self.z,self.file_name+"_iter",self.param["dir"],print_create=self.param["verbose"])
+            self.Plot(self.shade,self.file_name+"_shader",self.param["temp_dir"],print_create=self.param["verbose"])
+            self.Plot(self.frac_boundary,self.file_name+"_nobckg",self.param["temp_dir"],print_create=self.param["verbose"])
+            self.Plot(self.frac_boundary*normal,self.file_name+"_shader_nobckg",self.param["temp_dir"],print_create=self.param["verbose"])
+            self.Plot(self.z,self.file_name+"_iter",self.param["temp_dir"],print_create=self.param["verbose"])
             
 
 
@@ -245,9 +249,9 @@ class IMAGE():
             matplotlib.colors.ListedColormap: colormap
         """
         cmap=colors.LinearSegmentedColormap.from_list(cmap_name,color_list)
-        cm.register_cmap(name=cmap, cmap=cmap)
+        cm.register_cmap(name=cmap_name, cmap=cmap)
 
-        return cmap
+        return cmap_name
     
     def apply_colormap_with_alpha(arr, cmap_name):
         """
@@ -276,9 +280,13 @@ p
         Returns:
             matplotlib.colors.LightSource: light source
         """
+        blend_mode = kwargs.pop('blend_mode', 'soft')
+        norm = kwargs.pop('norm', colors.PowerNorm(0.3))
 
         lightS = colors.LightSource(azdeg=light[0], altdeg=light[1], **kwargs)
-        array = lightS.shade(array, cmap=self.cmap, vert_exag=light[2],fraction=light[3],**kwargs)
+
+        #assuming self.cmap is a str
+        array = lightS.shade(array, cmap=cm.get_cmap(self.cmap), vert_exag=light[2],fraction=light[3],blend_mode=blend_mode, norm=norm, **kwargs)
         return array
     
     def blinn_phong(self,normal, light):
@@ -452,7 +460,7 @@ if __name__=='__main__':
             #for j in range(10):
             #    obj.cmap=np.random.choice(cmap_dict)
             #    print(f"cmap{j}: ",obj.cmap)
-            #    obj.Plot(obj.shaded,param["image_name"]+f"_{j}",param["dir"],print_create=False)
+            #    obj.Plot(obj.shaded,param["image_name"]+f"_{j}",param["temp_dir"],print_create=False)
 
         except KeyboardInterrupt:
             sys.exit()

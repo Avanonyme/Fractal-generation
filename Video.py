@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 from PIL import Image as PILIM
 
 import cv2
@@ -19,9 +20,10 @@ from Image import IMAGE
 
 import imageio
 
-def clean_dir(folder):
+def clean_dir(folder, verbose=False):
     import shutil
-    print("Cleaning directory '% s'..." %folder)
+    if verbose:
+        print("Cleaning directory '% s'..." %folder)
     for filename in os.listdir(folder):
         file_path = os.path.join(folder, filename)
         try:
@@ -39,14 +41,14 @@ class VIDEO():
 
         ### Create folders
         self.APP_DIR = os.path.dirname(os.path.abspath(__file__))
-        self.IM_DIR=os.path.join(self.APP_DIR,"images")
+        self.IM_DIR=os.path.join(self.APP_DIR,param["temp_dir"])
         try: os.mkdir(self.IM_DIR)
         except: pass
-        self.VID_DIR=os.path.join(self.APP_DIR,"video")
+        self.VID_DIR=os.path.join(self.IM_DIR,"video")
         try: os.mkdir(self.VID_DIR)
         except: pass
 
-        self.FRAME_DIR=os.path.join(self.VID_DIR,"frames")
+        self.FRAME_DIR=os.path.join(self.VID_DIR,"frames") + "/"
         try: os.mkdir(self.FRAME_DIR)
         except: pass
         clean_dir(self.FRAME_DIR)
@@ -58,8 +60,11 @@ class VIDEO():
 
     def set_video_parameters(self,param):
         self.fps=param["fps"]
-        self.seconds=param["duration"]
+        self.duration=param["duration"]
         self.nb_frames = param["nb_frames"]
+
+        temp_im = IMAGE(param)
+        self.cmap = temp_im.cmap
 
         self.frac_boundary = []
 
@@ -83,200 +88,295 @@ class VIDEO():
 
         return mask
     
+    def normalize(self,img_obj):
+        """
+        Normalize image or list of images between 0 and 1
+        if img_obj is a list, normalize each image in the list
+
+        handle of true_divide error
+        """
+        # ignore divide by 0 error
+        np.seterr(divide='ignore', invalid='ignore')
+
+        if isinstance(img_obj,list):
+            result = [(arr - np.min(arr)) / (np.max(arr) - np.min(arr)) for arr in img_obj]
+            #check for true_divide error
+            for i,arr in enumerate(result):
+                if np.isnan(arr).any():
+                    result[i] = np.zeros(arr.shape)
+
+        else:
+            result = (img_obj - np.min(img_obj)) / (np.max(img_obj) - np.min(img_obj))
+            #check for true_divide error
+            if np.isnan(result).any(): #any because divide by 0 error says max = min
+                result = np.zeros(result.shape)
+        
+        # reset divide by 0 error
+        np.seterr(divide='warn', invalid='warn')
+        return result
+        
+    def convert_list(self,img_list, dtype):
+        
+        new_img_list = []
+        for img in img_list:
+            img = img.astype(dtype)
+            new_img_list.append(img)
+        return new_img_list
+        
+    def paste_image(self, path_background, path_foreground,img_alpha):
+        # Read the bckg image
+        if isinstance(path_background, str):
+            bckg = PILIM.open(path_background).convert('RGBA')
+        else:
+            bckg = PILIM.fromarray(path_background.astype(np.uint8)).convert('RGBA')
+
+        # Read the frgrd image
+        if isinstance(path_foreground, str):
+            frgrd = PILIM.open(path_foreground).convert('RGBA')
+        else:
+            frgrd = np.asarray(PILIM.fromarray(path_foreground.astype(np.uint8)).convert('RGBA')).copy()
+            # put alpha values
+            frgrd[:,:,3] = img_alpha
+
+            frgrd = PILIM.fromarray(frgrd)
+        
+
+        # Determine the position to center the frgrd image on the bckg image
+        x_offset = (bckg.width - frgrd.width) // 2
+        y_offset = (bckg.height - frgrd.height) // 2
+
+        # Paste the frgrd image onto the bckg image using the alpha channel as a mask
+        bckg.paste(frgrd, (x_offset, y_offset), frgrd)
+
+        return np.array(bckg)
     ### VIDEO MAKER ###
     def Video_maker(self,param, im_path_2=None, **kwargs):
-        print("Video maker (V-vm)...",end="")
+        if self.verbose:
+            print("Video maker (V-vm)...",end="")
 
         anim = param["anim"]
 
-        #inputs: param
-        if "zoom" and "translate" in anim:
-            frame_list = self.Zoom_and_Translate(param, zoom = True, translate = True)
-        elif "zoom" in anim:
-            frame_list = self.Zoom_and_Translate(param, zoom = True, translate = False)
-        elif "translate" in anim:
-            frame_list = self.Zoom_and_Translate(param, zoom = False, translate = True)
+        ## inputs: param
+        if "zoom" or "translate" or "shading" in anim:
+            frame_list = self.Zoom_and_Translate(param, animation = anim, **param["zoom_param"], **param["translation_param"])
+
         else:
             img_obj = IMAGE(param)
             frame_list = img_obj.Fractal_image()
             self.frac_boundary = img_obj.frac_boundary
-        #outputs: frame_list
+        ## outputs: frame_list
 
-        # inputs: image or frame_list
-        if "grain" in anim:
-            self.Grain_anim(frame_list)
+        ## inputs: image or frame_list
         if "pulsing" in anim:
-            self.Pulsing(frame_list,self.frac_boundary, param["pulsing"])
+            frame_list = self.Pulsing(frame_list,self.frac_boundary, **param["pulsing_param"])
         if "flicker" in anim:
-            self.Flicker(frame_list,)
-        # outputs: frame_list
-
-        # make video
+            frame_list = self.Flicker(frame_list,**param["flicker_param"])
         
-        print("Done (V-vm)")
+        # add explosion and grain (either this or zoom in image)
+        if "explosion" in anim:
+            frame_list = self.Grain(frame_list, **param["grain_param"])
+            frame_list = self.Explosion(frame_list, im_path_2, **param["explosion_param"])
+        ## outputs: frame_list
+
+        # zoom in image
+        if "zoom_in" in anim:
+            frame_list = self.Zoom_in(frame_list, **param["zoom_in_param"])
+
+        ## make video
+        
+        if self.verbose:
+            print("Done (V-vm)")
+
 
     ### ANIMATIONS ###
-    def Grain_anim(self,img_obj,im_path_2=None, **kwargs):
-        '''Generate explosion animation of input image, with rotational grain effect and flickering
+    def Explosion(self,img_obj,im_path_2=None, **kwargs):
+        '''Generate explosion animation of input image
         img_obj: image or images to be animated
-        im_path_2 (optionnal): put explosion on top of this image
+        im_path_2: put explosion on top of this image, if None, explosion is on top of black background
         '''
+        # get the parameters
+        log_base = kwargs.get('explosion_speed', 45)
+        inf_size = kwargs.get('start_size', (1,1))
+        resample = kwargs.get('resample_method', 3)
+        nb_frames = len(img_obj)
 
-        def deteriorate_border_anim(img, border_thickness=200, hole_size=3, n_frames=300):
-            """
-            Apply granular gfilter to an image
+        # get the size of the image
+        if isinstance(img_obj,list):
+            sup_size=(img_obj[0].shape[0],img_obj[0].shape[1])
+        else:
+            sup_size=(img_obj.shape[0],img_obj.shape[1])
+        
+        # get the list of sizes of the explosion
+        list_ex=list(np.unique(np.clip((np.logspace(np.log(inf_size[0]),np.log(sup_size[0]),num = 50, base = log_base)).astype(int),1,sup_size[0])))
+        explosion_size = len(list_ex)
 
-            img: a numpy array of shape (height, width, 3)
-            border_thickness: the thickness of the granular gfilter from the border (pixels)
-            hole_size: the size of the holes (radius of the disk structuring element)
-
-            return: a numpy array of shape (height, width, 3)
-            """
-            print("deterioating border...",end="")
-
-            def do_grain(mask_border,fill_value=0.3):
-                """
-                grainification of an image
-
-                """
-                # Apply distance transform
-                dist_transform = cv2.distanceTransform(mask_border.astype(np.uint8), cv2.DIST_L2, 5)
-                # Normalize the distance transform image for viewing
-                mask = (cv2.normalize(dist_transform, None, alpha=fill_value, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F))
-                # create the granular gfilter
-                gfilter = np.zeros(mask.shape)
-                gfilter = np.random.rand(*mask.shape) <= mask
-                return gfilter
-
-            def grain_fill(gfilter,fill_value=0.3):
-                """
-                fill empty space in  gfilter with more grain
-                """
-                dilation=ndimage.binary_fill_holes(gfilter.copy())
-
-                # Apply distance transform
-                dist_transform = np.float_power(cv2.distanceTransform(dilation.astype(np.uint8), cv2.DIST_LABEL_PIXEL, 5),0.7)
-                # Normalize the distance transform image for viewing
-                mask = (cv2.normalize(dist_transform, None, alpha=fill_value, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F))
-                # create the granular gfilter
-                new_filter = np.zeros(mask.shape)
-                new_filter = np.random.rand(*mask.shape) <= mask
-
-                return new_filter
-                
-            width,height=img.shape[0],img.shape[1]
-
-            # Hide center from gfilter
-            mask=np.ones((width,height))
-            mask[border_thickness:-border_thickness,border_thickness:-border_thickness]=0
-            mask_border=np.copy(mask)
-
-            #smaller mask
-            small_gfilter=np.ones((width,height))
-            border_thickness_small=border_thickness//2
-            small_gfilter[border_thickness_small:-border_thickness_small,border_thickness_small:-border_thickness_small]=0
-
-            gfilter=do_grain(mask_border,fill_value=0.0)
-            small_gfilter=do_grain(small_gfilter,fill_value=0.3)
-
-            small_gfilter=small_gfilter.astype(bool)
-            # Apply the granular gfilter on the distance transform
-            gfilter[small_gfilter]= ndimage.binary_dilation(gfilter[small_gfilter],iterations=hole_size)
-            gfilter = np.logical_not(gfilter).astype(np.float64)
+        temp_list = list(np.ones((nb_frames - 2*len(list_ex) -20)) * sup_size[0]) # 20 because we want animation to start before end of explosion
+        temp_list+=list(np.flip(list_ex))
+        list_ex +=temp_list
+        # get the background image
+        if im_path_2 is None:
+            #black background
+            im_bg = np.zeros((sup_size[1],sup_size[0],3))
+        else:
+            #image background
+            im_bg = np.asarray(PILIM.open(im_path_2).resize(sup_size))
+        
+        # loop over the images, resize, and add it on top of the background
+        frame_list = []
+        # while explosion, frame is similar to previous frame and resizing
+        for i,size in enumerate(list_ex):
+            if self.verbose:
+                print("explosion anim: ",i,"/",len(list_ex), end="\r")
             
-            frame_list=[]
-            
-            #Animate rotation of grain
-            new_gfilter=np.zeros((width,height))
-
-            if isinstance(img,list): #frame list
-                n_frames = len(img)
-                angles = np.around(np.linspace(0, 360, n_frames),2)
-
-                for image in img:
-                    i = angles[img.index(image)]
-                    print("rotation grain anim: ",int(i),"/360", end="\r")
-                    gfilter_rotated=ndimage.rotate(gfilter,i,reshape=False,cval=0,prefilter=False,mode="constant")
-                    new_gfilter+=gfilter_rotated-0.3*new_gfilter
-
-                    new_gfilter+=grain_fill(new_gfilter,fill_value=0.0).astype(np.float64)
-                    #new_gfilter %= 10
-
-                    new_gfilter = np.clip(new_gfilter,0,1.2)
-
-
-                    # Convert the numpy array back to a PIL Image and append it to the frames list
-                    try:
-                        new_img=image * np.repeat(new_gfilter[:, :, np.newaxis], 4, axis=2)
-                        print("RGBA mode ", end="")
-                    except:
-                        try:
-                            new_img=image * np.repeat(new_gfilter[:, :, np.newaxis], 3, axis=2)
-                            print("RGB mode ", end="")
-                        except:
-                            new_img=image * new_gfilter
-                            print("L mode ",end="")
-                
-                    frame_list.append(np.uint8(new_img)) # to save as gif
-
-
+            if isinstance(img_obj,list) and size == sup_size[0] or not (i<explosion_size-10 or i>explosion_size+10): #middle frames
+                print(" middle frames",end="")
+                img = img_obj[i]
+            elif isinstance(img_obj,list) and size != sup_size[0] and (i<explosion_size-10 or i>explosion_size+10): #start and end frames
+                #check if size is smaller than previous size
+                if size < list_ex[i-1]: #size is smaller than previous size, we're in the shrinking phase (end)
+                    print(" we're in the shrinking phase (end)",end="")
+                    img = img_obj[i-1]
+                else: #size is bigger than previous size, we're in the explosion phase (beginning)
+                    print(" we're in the explosion phase (beginning)",end="")
+                    img = img_obj[i+1]
             else:
-                angles = np.around(np.linspace(0, 360, n_frames),2)
-                for i in angles:
-
-                    print("rotation grain anim: ",int(i),"/360", end="\r")
-                    gfilter_rotated=ndimage.rotate(gfilter,i,reshape=False,cval=0,prefilter=False,mode="constant")
-                    new_gfilter+=gfilter_rotated-0.3*new_gfilter
-
-                    new_gfilter+=grain_fill(new_gfilter,fill_value=0.0).astype(np.float64)
-                    #new_gfilter %= 10
-
-                    new_gfilter = np.clip(new_gfilter,0,1.2)
+                print(" else",end="")
+                img = img_obj
 
 
-                    # Convert the numpy array back to a PIL Image and append it to the frames list
-                    try:
-                        new_img=img * np.repeat(new_gfilter[:, :, np.newaxis], 4, axis=2)
-                        print("RGBA mode ", end="")
-                    except:
-                        try:
-                            new_img=img * np.repeat(new_gfilter[:, :, np.newaxis], 3, axis=2)
-                            print("RGB mode ", end="")
-                        except:
-                            new_img=img * new_gfilter
-                            print("L mode ",end="")
-                
-                    frame_list.append(np.uint8(new_img)) # to save as gif
+            img_alpha = np.where(img == 0, 0,1)*255
+            img_alpha = np.asarray(PILIM.fromarray(img_alpha.astype(np.uint8)).resize((size,size),resample=resample)) if size != sup_size[0] else img_alpha
+            
+            plt.imsave(self.FRAME_DIR + f"frame_{i}.png",img, cmap = self.cmap, vmin=0,vmax=255) #image must be in RGB or RGBA format
+            im = np.asarray(PILIM.open(self.FRAME_DIR + f"frame_{i}.png").resize((size,size),resample=resample)) if size != sup_size[0] else np.asarray(PILIM.open(self.FRAME_DIR + f"frame_{i}.png"))
 
-            print('deterioate border anim done')
-            return frame_list
+            new_im = self.paste_image(im_bg,im,img_alpha)
 
+            frame_list.append(new_im) #list of arrays (n,n,3)
+            
+        # while not explosion, we just save the frame
+        return frame_list
+    
+    def Grain(self,img, **kwargs):
+        """
+        Apply granular gfilter to an image
+
+        img: a numpy array of shape (height, width, 3)
+        border_thickness: the thickness of the granular gfilter from the border (pixels)
+        hole_size: the size of the holes (radius of the disk structuring element)
+
+        return: a numpy array of shape (height, width, 3)
+        """
+        if self.verbose:
+            print("grain anim...",end="")
         # get the parameters
         border_thickness = kwargs.get('border_thickness', 200)
-        hole_size = kwargs.get('hole_size', 3)
-        n_frames = kwargs.get('n_frames', 300)
-        log_base = kwargs.get('log_base', 7)
-        inf_size = kwargs.get('inf_size', (1,1))
-        #explosion
-        #Explosion is resizing of image w/ filter
-        if isinstance(img_obj,list):
-            sup_size=(img_obj[0].size[0],img_obj[0].size[1])
-        else:
-            sup_size=(img_obj.size[0],img_obj.size[1])
-        list_ex=np.clip((np.logspace(np.log(inf_size[0]),np.log(sup_size[0]),num = 300, base = log_base)).astype(int),1,sup_size[0])
-        list_ex=np.append(np.unique(list_ex),sup_size[0])
+        hole_size = kwargs.get('hole_size', np.ones((1,1)))
+        n_frames = kwargs.get('nb_frames', self.fps * self.duration)
+        distance_exponent_big = kwargs.get('distance_exponent', 0.3)
+        distance_exponent_small = kwargs.get('distance_exponent', 0.3)
 
-        #Create frames
-        frame_list = deteriorate_border_anim(img_obj, border_thickness=border_thickness, hole_size=hole_size, n_frames=n_frames)
+        nb_rotation = kwargs.get('nb_rotation', 1)
+
+        def do_grain(mask_border,fill_value=0.3,distance_exponent=0.3):
+            """
+            grainification of an image
+
+            """
+            # Apply distance transform
+            dist_transform = cv2.distanceTransform(mask_border.astype(np.uint8), cv2.DIST_L2, 5)
+            dist_transform = np.float_power(dist_transform * (1 + dist_transform / np.max(dist_transform)), distance_exponent)
+
+            # Normalize the distance transform image for viewing
+            mask = (cv2.normalize(dist_transform, None, alpha=fill_value, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F))
+            # create the granular gfilter
+            gfilter = np.zeros(mask.shape)
+            gfilter = ndimage.binary_dilation(np.random.rand(*mask.shape) <= mask, structure= hole_size)
+            return gfilter
+
+        def grain_fill(gfilter,fill_value=0.3):
+            """
+            fill empty space in  gfilter with more grain
+            """
+            dilation=ndimage.binary_fill_holes(gfilter.copy())
+
+            # Apply distance transform
+            dist_transform = np.float_power(cv2.distanceTransform(dilation.astype(np.uint8), cv2.DIST_LABEL_PIXEL, 5),0.5)
+            # Normalize the distance transform image for viewing
+            mask = (cv2.normalize(dist_transform, None, alpha=fill_value, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F))
+            # create the granular gfilter
+            new_filter = np.zeros(mask.shape)
+            new_filter = np.random.rand(*mask.shape) <= mask
+
+            return new_filter
+        if isinstance(img,list):
+            n_frames = len(img)
+            width,height=img[0].shape[0],img[0].shape[1]
+        else:
+            width,height=img.shape[0],img.shape[1]
+
+        # Hide center from gfilter
+        mask=np.ones((width,height))
+        mask[border_thickness:-border_thickness,border_thickness:-border_thickness]=0
+        mask_border=np.copy(mask)
+
+        #smaller mask
+        small_gfilter=np.ones((width,height))
+        border_thickness_small=border_thickness//2
+        small_gfilter[border_thickness_small:-border_thickness_small,border_thickness_small:-border_thickness_small]=0
+
+        gfilter=do_grain(mask_border,fill_value=0.3,distance_exponent=distance_exponent_big)
+        small_gfilter=do_grain(small_gfilter,fill_value= 0.1,distance_exponent=distance_exponent_small)
+
+        small_gfilter=small_gfilter.astype(bool)
+        # Apply the granular gfilter on the distance transform
+        gfilter = np.logical_not(gfilter).astype(np.float64)
         
-        # Apply resizing explosion
-            #match size of explosion to size of image
-        for i in range(len(frame_list)-len(list_ex)):
-            list_ex = np.append(list_ex,list_ex[-1])
-        for i in range(len(frame_list)):
-            frame_list[i]=frame_list[i].resize((list_ex[i],list_ex[i]))
+        frame_list=[]
         
-        return frame_list
+        #Animate rotation of grain
+        new_gfilter=np.zeros((width,height))
+
+        if isinstance(img,list): #frame list
+            n_frames = len(img)
+            angles = np.around(np.linspace(0, 360 * nb_rotation, n_frames),2)
+
+            for n,image in enumerate(img):
+                i = angles[n]
+                print("rotation grain anim: ",int(i),"/", 360 * nb_rotation, end="\r")
+                gfilter_rotated=ndimage.rotate(gfilter,i,reshape=False,cval=0,prefilter=False,mode="constant")
+                new_gfilter+=gfilter_rotated-0.3*new_gfilter
+
+                new_gfilter+=grain_fill(new_gfilter,fill_value=0.0).astype(np.float64)
+                #new_gfilter %= 10
+
+                new_gfilter = np.clip(new_gfilter,0,1.2)
+
+                new_img=image * new_gfilter
+            
+                frame_list.append((self.normalize(new_img) * 255).astype(np.uint8))
+
+
+        else:
+            angles = np.around(np.linspace(0, 360 * nb_rotation, n_frames),2)
+            for i in angles:
+                
+                if self.verbose:
+                    print("rotation grain anim: ",int(i),"/", 360 * nb_rotation, end="\r")
+                gfilter_rotated=ndimage.rotate(gfilter,i,reshape=False,cval=0,prefilter=False,mode="constant")
+                new_gfilter+=gfilter_rotated-0.3*new_gfilter
+
+                new_gfilter+=grain_fill(new_gfilter,fill_value=0.0).astype(np.float64)
+                #new_gfilter %= 10
+
+                new_gfilter = np.clip(new_gfilter,0,1.2)
+
+                new_img=img * new_gfilter
+            
+                frame_list.append((self.normalize(new_img) * 255).astype(np.uint8))
+        if self.verbose:
+            print('grain anim done')
+        return frame_list #int 0-255 list of array (n,n)
     
     def Flicker(self,img_obj,**kwargs):
         """
@@ -287,7 +387,7 @@ class VIDEO():
         flicker_amplitude: the amplitude of the flicker effect 
         flicker_percentage: the percentage of pixels to flicker
         dilation_size: the size of the dilation kernel
-        n_frames: the number of frames in the animation (single image only)
+        nb_frames: the number of frames in the animation (single image only)
         on_fractal: whether to apply the flicker on the fractal or everywhere
 
         return: a list of numpy arrays of shape [frames,(height, width, 3)]
@@ -296,13 +396,13 @@ class VIDEO():
         dilation_size = kwargs.get("dilation_size", 2)
         flicker_amplitude = kwargs.get("flicker_amplitude", 0.9)
         flicker_percentage = kwargs.get("flicker_percentage", 0.0005)
-        n_frames = kwargs.get("n_frames", 300)
+        nb_frames = kwargs.get("nb_frames", self.fps * self.duration)
         on_fractal = kwargs.get("on_fractal", False)
 
         if self.verbose:
             print("Flicker animation...", end="")
         # We'll store each frame as we create it
-        frames = []
+        frame_list = []
         # Calculate the total number of pixels
         if isinstance(img_obj,list):
             total_pixels = img_obj[0].shape[0] * img_obj[0].shape[1]
@@ -320,88 +420,93 @@ class VIDEO():
         np.put(mask,flicker_indices,1)
         mask=(mask).astype(bool)    
 
-        #assign random values to flicker indices
-        mask_start=np.zeros((width,height))
-        np.put(mask_start,flicker_indices,np.random.uniform(0,255,num_flicker_pixels))
-
-        #dilate mask
-        for i in range(dilation_size):
-            
-            mask_start+=dilation(mask_start,disk(i))
         mask=ndimage.binary_dilation(mask,iterations=dilation_size)
 
+        #update flicker indices
+        flicker_indices=np.where(mask==1)
+
+        # give random [-2pi,2pi] value to phase
+        phase = np.random.uniform(-2*np.pi,2*np.pi,mask.shape)
+
+        
+        
         # Apply flicker effect on fractal only, if specified
         if on_fractal:
+            
+            if isinstance(img_obj,list):
+                #copy mask n times, where n is the number of frames
+                mask = [mask.copy() for i in range(nb_frames)]
+                for i,img_array in enumerate(img_obj):
+                    fractal_mask=self.frac_boundary[i]
+                    fractal_mask = np.where(fractal_mask>0.5,1,0).astype(bool)
 
-            fractal_mask=self.frac_boundary
-            fractal_mask = np.where(fractal_mask>0.5,1,0)
+                    mask[i]*=fractal_mask
 
-            mask_start*=fractal_mask
+            else:
+                fractal_mask=self.frac_boundary
+                fractal_mask = np.where(fractal_mask>0.5,1,0).astype(bool)
 
-        # Create a function that will be used to generate the flicker effect
-        def smooth_step(x,a,b):
-            x=np.where((x>=a)&(x<=b),3*(x-a)**2/(b-a)**2-2*(x-a)**3/(b-a)**3,np.where(x<a,0,1))
-            return x
-        
-        pulse_func=lambda x: (smooth_step(np.mod(x,1.5),-4,0.6)-smooth_step(np.mod(x,1.5),-5-1/3,0.8))/0.006821  #experimentally determined (lol)
+                mask*=fractal_mask
+
+        pulse_func = lambda x,phase: np.sin(x * 2*np.pi + phase ) + 1 #sinusoidal flicker,
+        pulse_func = np.vectorize(pulse_func)
 
         if isinstance(img_obj,list): #multiple images
-            i = 0
-            for img_array in img_obj:
+            
+            for i,img_array in enumerate(img_obj):
+                
                 img_array = img_array.copy()
-                # Create a multiplier that goes between 1-flicker_amplitude and 1+flicker_amplitude
-                # We use a function to create a smooth flicker effect
-                flicker_multiplier = np.array((1 + flicker_amplitude * pulse_func((mask_start * i) + 1.5)))[mask]
 
-                if img_array.shape[-1]==4:
-                    #RGBA
-                    flicker_multiplier = np.repeat(flicker_multiplier[:, np.newaxis], 4, axis=1)
-                elif img_array.shape[-1]==3:
-                    #RGB
-                    flicker_multiplier = np.repeat(flicker_multiplier[:, np.newaxis], 3, axis=1)
-                else:
-                    #L
-                    pass
+                # Calculate the sine value for each pixel (including phase)
+                sine_values = np.sin((i / nb_frames * 2 * np.pi) + phase)
 
-                # apply the flicker effect
-                img_array[mask] = np.clip(img_array[mask] * flicker_multiplier,0,200)
+                # Apply the mask to the sine values
+                sine_values_masked = sine_values * mask[i]
 
-                # Convert the numpy array back to a PIL Image and append it to the frames list
-                frames.append(np.uint8(img_array))
+                # Calculate the flicker multiplier
+                flicker_multiplier = 1 + (flicker_amplitude * sine_values_masked)
 
-                i+=1/len(img_obj)
+                # Apply on image
+                img_array = img_array * flicker_multiplier
+
+                # Normalize the image
+                img_array = (self.normalize(img_array) * 255).astype(np.uint8)
+
+                # Add the image to the frame list
+                frame_list.append(img_array)
+
+               
             
         else: #single image
 
             # Specify the number of frames you want in the animation
-            num_frames = n_frames
+            num_frames = nb_frames
             for i in range(num_frames+1):
-                # Create a multiplier that goes between 1-flicker_amplitude and 1+flicker_amplitude
-                # We use a function to create a smooth flicker effect
-                flicker_multiplier = np.array((1 + flicker_amplitude * pulse_func(mask_start * i / num_frames+1.5)))[mask]
-
-                if img_obj.shape[-1]==4:
-                    #RGBA
-                    flicker_multiplier = np.repeat(flicker_multiplier[:, np.newaxis], 4, axis=1)
-                elif img_obj.shape[-1]==3:
-                    #RGB
-                    flicker_multiplier = np.repeat(flicker_multiplier[:, np.newaxis], 3, axis=1)
-                else:
-                    #L
-                    pass
-                # copy the array so we don't overwrite the original
+                
                 img_array = img_obj.copy()
 
-                # apply the flicker effect
-                img_array[mask] = np.clip(img_array[mask] * flicker_multiplier,0,200)
+                # Calculate the sine value for each pixel (including phase)
+                sine_values = np.sin((i / nb_frames * 2 * np.pi) + phase)
 
-                # Convert the numpy array back to a PIL Image and append it to the frames list
-                frames.append(np.uint8(img_array))
+                # Apply the mask to the sine values
+                sine_values_masked = sine_values * mask
+
+                # Calculate the flicker multiplier
+                flicker_multiplier = 1 + (flicker_amplitude * sine_values_masked)
+
+                # Apply on image
+                img_array *= flicker_multiplier
+
+                # Normalize the image
+                img_array = (self.normalize(img_array) * 255).astype(np.uint8)
+
+                # Add the image to the frame list
+                frame_list.append(img_array)
 
         if self.verbose:
             print("flicker anim done")
 
-        return frames
+        return frame_list #int 0 - 255 list of arrays(n,n)
 
     def Pulsing(self,img_obj,fractal_bounds,**kwargs):
         """ 
@@ -418,16 +523,16 @@ class VIDEO():
         # get the parameters
         beta = kwargs.get("beta",-0.3)
         decal = kwargs.get("decal",0)
-        cmap = kwargs.get("cmap","gray")
+        cmap = kwargs.get("cmap",self.cmap)
+        omega = kwargs.get("oscillation_frequency",np.pi)
+        amplitude = kwargs.get("amplitude",1)
+        c = kwargs.get("c",None)
 
         if self.verbose:
             print("Pulsing...")
 
         def f(u,beta = -0.03):
-            #beta = -0.03  # Damping coefficient for oscillations
-            omega = 2*np.pi # Frequency of oscillations
-            A = 1 #amplitude
-            return A * np.exp(- beta * u) * np.sin(omega * u)
+            return amplitude * np.exp(- beta * u) * np.sin(omega * u)
         
         if isinstance(img_obj,list):
             img = img_obj[0]
@@ -437,15 +542,17 @@ class VIDEO():
             max_t = len(img_obj)
 
             #speed of the wave
-            c = (frac_size + decal)//max_t
+            if c is None:
+                c = (frac_size + decal)/max_t
         else:
             img = img_obj
 
             frac_size = img_obj.shape[0]
             
-            c = frac_size // 300  # speed of the wave
+            if c is None:
+                c = frac_size / 300  # speed of the wave
             # Time
-            max_t = (frac_size + decal) // c
+            max_t = self.fps*self.duration if self.nb_frames is None else self.nb_frames
         
         if beta is None:
             beta = - 25 / frac_size
@@ -458,7 +565,7 @@ class VIDEO():
 
 
         # frame array
-        frame_array = []
+        frame_list = []
 
         X, Y = np.meshgrid(np.arange(frac_size), np.arange(frac_size))
         R = np.sqrt((X - x_center)**2 + (Y - y_center)**2) #distance
@@ -471,29 +578,31 @@ class VIDEO():
             Psi = f(R - c * t,beta=beta)
 
             if isinstance(img_obj,list):
-                wave_im = (((Psi * Mask) * fractal_bounds[step] * 255)).astype(np.uint8)
+                try: #fractal bounds is a list
+                    wave_im = (((Psi * Mask) * fractal_bounds[step] * 255)).astype(np.uint8)
+                except: #fractal bounds is a list containing one array
+                    wave_im = (((Psi * Mask) * fractal_bounds[0] * 255)).astype(np.uint8)
 
-                img_obj[step] = (img_obj[step] * 255/np.max(img_obj[step]))
-                plt.imsave(f"images/pulse.png", wave_im + img_obj[step]//3, vmin=0, vmax=255, cmap = cmap, **kwargs)
+                img = (img_obj[step] * 255/np.max(img_obj[step]))
+                
+                #new_im = (self.normalize(wave_im + img_obj[step]) * 255).astype(np.uint8)
+
             else: #single image
-                wave_im = (((Psi * Mask) * fractal_bounds * 255)).astype(np.uint8)
+                wave_im = (((Psi * Mask) * fractal_bounds[0] * 255)).astype(np.uint8)
                 
                 img = (img * 255/np.max(img)) # image always appears
-                #or
-                #img /= np.max(img) # image appears with wave
-                plt.imsave(f"images/pulse.png", wave_im + img//2, vmin=0, vmax=255, cmap = cmap,**kwargs) #let matplotlib handle the coloring
-            
-            wave_im = PILIM.open(f"images/pulse.png").resize(img.shape)
-            wave_im = np.asarray(wave_im)
-
-            frame_array.append(wave_im)
+                
+                #new_im = (self.normalize(wave_im + img) * 255).astype(np.uint8)
+                
+                
+            frame_list.append((wave_im + img).astype(np.uint8))
             if self.verbose:
                 print("  ",step,"/",max_t,np.max(Psi) ,end="\r")
         if self.verbose:
             print("Pulsing done")
-        return frame_array
+        return frame_list #int 0 - 255 list of arrays(n,n)
 
-    def Zoom_and_Translate(self,param, zoom = True, translate = False, **kwargs):
+    def Zoom_and_Translate(self,param, animation = "zoom translate shading", **kwargs):
         """
         Create a zoom and/or complex translation animation of the fractal image
         
@@ -510,32 +619,38 @@ class VIDEO():
         """
         if self.verbose:
             print("(Vm-Zoom_and_Translate)...")
-            if zoom:
+            if 'zoom' in animation:
                 print("Zooming...",end=" ")
-            if translate:
+            if "translate" in animation:
                 print("Translating...")
+            if "shading" in animation:
+                print("Shading...",end=" ")
         # get the parameters
         init_damp_r = kwargs.get("init_damp_r",0.4)
         end_damp_r = kwargs.get("end_damp_r",1.35)
         init_damp_c = kwargs.get("init_damp_c",-0.5)
         end_damp_c = kwargs.get("end_damp_c",0.85)
 
-        zoom_speed = kwargs.get("zoom_speed",1.1)
+        zoom_speed_factor = kwargs.get("zoom_speed",1.1)
 
 
-        nb_frames = self.fps*self.seconds if self.nb_frames is None else self.nb_frames
+        nb_frames = self.fps*self.duration if self.nb_frames is None else self.nb_frames
         if self.nb_frames is not None:
             self.fps = 20
-            self.seconds = self.nb_frames//self.fps
+            self.duration = self.nb_frames//self.fps
 
 
         # we'll save the frames in a list
         frame_list = []
 
         # get damping list from the parameters
-        if translate == True:
-            damping_list=np.linspace(init_damp_r,end_damp_r,self.fps*self.seconds+1)+np.linspace(init_damp_c,end_damp_c,self.fps*self.seconds+1)*1j
+        if "translate" in animation:
+            damping_list=np.linspace(init_damp_r,end_damp_r,self.fps*self.duration+1)+np.linspace(init_damp_c,end_damp_c,self.fps*self.duration+1)*1j
             param["damping"]=damping_list[0]
+
+        if "shading" in animation:
+            nb_rotation = kwargs.get("nb_rotation",1)
+            azimuth = np.linspace(0,22.5 * nb_rotation, nb_frames)
 
         def check_coord(z,edges,dpi,coord,zoom,prev_point):
             #init old coord
@@ -559,38 +674,117 @@ class VIDEO():
             return coord,point
         
         #loop over frames
+        zoom_speed = 1
         for _ in range(nb_frames):
-        # num_frames is self.fps*self.seconds
-            if self.verbose:
-                print(" ",_,end="\r")
+        # num_frames is self.fps*self.duration
+
+            print("Zoom and Translate and Shading",_,end="\r")
             #Create frame
             Imobj=IMAGE(param) 
             im = Imobj.Fractal_image()
-
             # update parameters
             #_==0
             if _ == 0:
+                print("Zoom and Translate and Shading",_,end="")
                 param["form"]=None
                 param["random"]=False #True only for first frame at most
                 param["pts"] = [0,0]
 
+                if self.verbose:
+                    #turn it off for specific function cause it's annoying
+                    self.verbose = False
+                    remind_me_to_turn_it_back_on = True
+                param["verbose"] = False
 
             param["func"]= Imobj.func
-
-            if zoom == True:
-                zoom_speed = 1/zoom_speed
-                param["domain"],param["pts"]=check_coord(im,Imobj.frac_boundary,param["dpi"],param["domain"],zoom_speed,prev_point=param["pts"])
-            if translate == True:
-                param["damping"]=damping_list[_]
             
-            #save frame
+            if "zoom" in animation:
+                zoom_speed = zoom_speed/zoom_speed_factor
+                param["domain"],param["pts"]=check_coord(im,Imobj.frac_boundary,param["dpi"],param["domain"],zoom_speed,prev_point=param["pts"])
+            if "translate" in animation:
+                print('kespass')
+                param["damping"]=damping_list[_]
 
-            self.frac_boundary.append(Imobj.frac_boundary)
-            frame_list.append(im)
+            
+            #save frames
+            if "zoom" or "translate" in animation:
+                self.frac_boundary.append(Imobj.frac_boundary)
+
+            if "shading" in animation:
+                shade_im = self.Dynamic_shading(Imobj,azimuth = [azimuth[_]] ,**kwargs)[0]
+                frame_list.append((self.normalize(shade_im) * 255).astype(np.uint8))
+            else:
+                frame_list.append((self.normalize(im) * 255).astype(np.uint8))
+
         if self.verbose:
             print("Done (Vm Zoom_and_Translate)")
-        return frame_list
+        if remind_me_to_turn_it_back_on:
+            self.verbose = True
+
+        return frame_list #int 0 - 255 list of arrays(n,n)
     
+    def Dynamic_shading(self, img_obj ,**kwargs):
+        """
+        Create a day passing effect using normal of the fractal image and a light source
+
+        img_obj: IMAGE object
+
+        kwargs:
+        light: tuple of the light source coordinates
+        shader_type: type of shading (blinn-phong, matplotlib)
+
+        nb_rotation: number of complete rotation of the light source
+        
+        
+        """
+
+        if self.verbose:
+            print("(Vm-Dynamic_shading)...")
+        # get the parameters
+        light = kwargs.get("light",(45., 0, 40., 0, 0.5, 1.2, 1))
+        shader_type = kwargs.get("type","blinn-phong")
+        nb_rotation = kwargs.get("nb_rotation",1)
+        blend_mode = kwargs.get("blend_mode","normal")
+        norm = kwargs.get("norm",colors.PowerNorm(0.3))
+        
+
+        nb_frames = self.fps*self.duration if self.nb_frames is None else self.nb_frames
+        if self.nb_frames is not None:
+            self.fps = 20
+            self.duration = self.nb_frames//self.fps
+
+
+        
+        # we'll save the frames in a list
+        frame_list = []
+
+        #loop over frames
+        azimuth_list = kwargs.pop("azimuth",np.linspace(0,22.5 * nb_rotation, nb_frames))
+        for azimuth in azimuth_list:
+            light = list(light)
+            light[0] = azimuth
+            light = tuple(light)
+            print(" ",azimuth,end="\r")
+
+                #Shading
+            if shader_type == "blinn-phong":
+                shade=img_obj.blinn_phong(img_obj.normal,light)
+            elif shader_type == "matplotlib":
+                shade=img_obj.matplotlib_light_source(img_obj.z,light,blend_mode=blend_mode,norm=norm)
+            elif shader_type == "fossil":
+                shade=img_obj.matplotlib_light_source(img_obj.z*img_obj.frac_boundary,light,blend_mode=blend_mode,norm=norm)
+            else:
+                print("Shader type not recognized or None (Vm Dynamic_shading)")
+                return img_obj.z
+
+            #save frame
+            frame_list.append((self.normalize(shade) * 255).astype(np.uint8))
+
+        if self.verbose:
+            print("Done (Vm Dynamic_shading)")
+        return frame_list
+        
+        
 if __name__=='__main__':
     i=0
     cmap_dict = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
