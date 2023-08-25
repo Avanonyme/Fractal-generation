@@ -1,13 +1,14 @@
 import os
 import PIL.Image as PILIM
 import numpy as np
-from Image import IMAGE
+from Image import IMAGE, COLOUR
 from Video import VIDEO
 import imageio
 
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
+import matplotlib.cm as cm
 
 cmap_dict = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
                 'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
@@ -29,18 +30,18 @@ param={
         "temp_dir": "images", #where to put temporary results
 
         #### Video parameters
-        "anim method":"explosion zoom", #pulsing, zoom, translation, flicker, explosion, grain
+        "anim":"explosion pulsing zoom", #pulsing, zoom, translation, flicker, explosion, shading, grain
 
         # Frame parameters
         "fps":20 ,
-        "duration":20, #seconds
+        "duration":30, #seconds
         "nb_frames": None, #number of frames, if None, duration and fps are used
 
         # Animation parameters
         "explosion_param": {"explosion_speed": 45, #log base
                             "start_size": (1,1), #start size in pixels
                             },
-        "pulsing_param": {"beta":-0.002, #if None, -25/size
+        "pulsing_param": {"beta":-0.004, #if None, -25/size
                           "decal": 0,
                           "oscillation_frequency":np.pi/50,
                           "oscillation_amplitude": 10,
@@ -55,11 +56,11 @@ param={
                           "on_fractal" : True, 
                           "dilation_size" : 2,
                           "flicker_amplitude" : 2},
-        "grain_param": {"border_thickness": 500,
-                        "hole_size": np.ones((2,2)),
-                        "distance_exponent_big": 0.6,
+        "grain_param": {"border_thickness": 300,
+                        "hole_size": np.ones((3,3)),
+                        "distance_exponent_big": 1.2,
                         "distance_exponent_small": 0.6,
-                        "nb_rotation":2,
+                        "nb_rotation":1,
                         },
         "zoom_param": {"zoom_speed":1.02,
                        
@@ -69,7 +70,7 @@ param={
         "dir": "images",
         "file_name": f"test0",
         "raster_image":np.random.choice(raster_image_list), # if None, raster image is np.zeros((size,size))
-        "dpi":1000,
+        "dpi":2000,
 
         #Colors
         "color_list":["black","darkgrey","orange","darkred"],
@@ -86,7 +87,7 @@ param={
 
         #### Fractal parameters
         "method": "RFA Newton",
-        "size": 1000,
+        "size": 2000,
         "domain":np.array([[-1,1],[-1,1]]),
         ## RFA parameters
         "random":True,
@@ -103,63 +104,10 @@ param={
 
         ## Method parameters
         #Newton, Halley
-        "itermax":20,
+        "itermax":60,
         "tol":1e-8,
         "damping":complex(1.01,-.01),
 }
 
-if __name__ == "__main__":
-
-    sdir = "test/"
-
-    print("cmap", param["cmap"])
-    #create video object
-    video = VIDEO(param)
-
-    #print("begin zoom")
-    #frame_list = video.Zoom_and_Translate(param,anim="zoom",**param["zoom_param"])
-    #print("saving zoom")
-    #imageio.mimsave(sdir+"zoom.gif",frame_list,fps=20)
-
-    #print("begin translate")
-    #frame_list = video.Zoom_and_Translate(param,anim = "translate",**param["translation_param"])
-    #print("saving translate")
-    #imageio.mimsave(sdir+"translate.gif",frame_list,fps=20)
-
-    #create image object
-    image = IMAGE(param)
-    frame_list = image.Fractal_image()
-    video.frac_boundary.append(image.frac_boundary)
-
-    #print("begin zoom and dynamic shading")
-    #frame_list = video.Zoom_and_Translate(param,anim = "zoom translate shading",**param["zoom_param"],**param["shading"],**param["translation_param"])
-    #print(frame_list[0].shape)
-    
-    #print("begin flicker")
-    #frame_list = video.Flicker(frame_list ,**param["flicker_param"])
-    #print(frame_list[0].shape)
-    #imageio.mimsave(sdir+"flicker.gif",frame_list,fps=20)
-
-    #frame_list = video.Pulsing(frame_list ,video.frac_boundary,**param["pulsing_param"])
-    #print(frame_list[0].shape)
-    #print("begin grain")
-    #frame_list = video.Grain(frame_list,**param["grain_param"])
-    #print(frame_list[0].shape)
-    #imageio.mimsave(sdir+"all_anim.gif",frame_list,fps=20)
-    #print("begin pulsing")
 
 
-    #imageio.mimsave(sdir+"pulsing.gif",frame_list,fps=20)
-
-    #print("day passing")
-    #frame_list = video.Day_passing(image, **param["shading"])
-    #print("saving day passing")
-    #imageio.mimsave(sdir+"day_passing.gif",frame_list,fps=20)
-
-    #print("begin explosion")
-    #frame_list = video.Explosion(frame_list, **param["explosion_param"])
-    #print("saving explosion")
-    #imageio.mimsave(sdir+"explosion.gif",frame_list,fps=20)
-
-        # create a new figure (RGB with cmap, A with img_alpha)
-                

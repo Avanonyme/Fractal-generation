@@ -2,17 +2,24 @@ import os
 import sys
 
 import numpy as np
+import math
 
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
-import matplotlib.colors as colors
 import matplotlib.cm as cm
-from PIL import Image as PILIM
+from PIL import Image as PILIM, ImageDraw
 
 from scipy.ndimage import gaussian_filter,sobel,binary_dilation
 from skimage.filters import threshold_local
 from skimage.feature import canny
+
+import matplotlib.colors as mcolors
+import extcolors as extc
+from colorspacious import cspace_convert, cspace_converter
+from scipy.spatial import cKDTree
+import colorsys
+import seaborn as sns
 
 from RFA_fractals import RFA_fractal
 
@@ -248,7 +255,7 @@ class IMAGE():
         Returns:
             matplotlib.colors.ListedColormap: colormap
         """
-        cmap=colors.LinearSegmentedColormap.from_list(cmap_name,color_list)
+        cmap=mcolors.LinearSegmentedColormap.from_list(cmap_name,color_list)
         cm.register_cmap(name=cmap_name, cmap=cmap)
 
         return cmap_name
@@ -281,9 +288,9 @@ p
             matplotlib.colors.LightSource: light source
         """
         blend_mode = kwargs.pop('blend_mode', 'soft')
-        norm = kwargs.pop('norm', colors.PowerNorm(0.3))
+        norm = kwargs.pop('norm', mcolors.PowerNorm(0.3))
 
-        lightS = colors.LightSource(azdeg=light[0], altdeg=light[1], **kwargs)
+        lightS = mcolors.LightSource(azdeg=light[0], altdeg=light[1], **kwargs)
 
         #assuming self.cmap is a str
         array = lightS.shade(array, cmap=cm.get_cmap(self.cmap), vert_exag=light[2],fraction=light[3],blend_mode=blend_mode, norm=norm, **kwargs)
@@ -390,80 +397,557 @@ p
         return image_bg_copy
 
 
+class COLOUR():
+    """
+    Generate list of colours hex codes from a list of colours, an image or colour palettes
 
-if __name__=='__main__':
-    import time
-    cmap_dict = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
-                  'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
-                  'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn',
-                  'spring', 'summer', 'autumn', 'winter', 'cool','Wistia',
-                  'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy', 'RdBu', 'RdYlBu']
-    
-    raster_image_list=["circle","circle2","fire","human","eyes","planet","stars"]
-    start_time=time.time()
+    """
 
-    i=0
-    for k in range(1):
-        new_time=time.time()
-        print("-----------------",i,"------------------")
-
-        param={
-        #### General parameters
-        "clean_dir":False, #clean image dir before rendering
-        "verbose":False, #print stuff
-        "test":True, #for trying stuff and knowing where to put it
-        "media_form":"image", #image or video
-
-        #### Image parameters
-        #General
-        "dir": "images",
-        "file_name": f"test{i}",
-        "raster_image":np.random.choice(raster_image_list), # if None, raster image is np.zeros((size,size))
-        "dpi":1000,
-
-        #Colors
-        "color_list":["black","darkgrey","orange","darkred"],
-        "cmap":np.random.choice(cmap_dict), #for testing only
-
-        #Shading
-        "shading":True,
-        "lights": (45., 0, 40., 0, 0.5, 1.2, 1),
-        #Filters
-
-        #### Fractal parameters
-        "method": "RFA Newton",
-        "size": 500,
-        "domain":np.array([[-1,1],[-1,1]]),
-        ## RFA paramters
-        "random":True,
-        # Polynomial parameters (Must have value if random==False)
-        "degree": None, #random.randint(5,20),
-        "func": None,#[1,-1/2+np.sqrt(3)/2*1j,-1/2-np.sqrt(3)/2*1j,1/2+np.sqrt(3)/2*1j,1/2-np.sqrt(3)/2*1j], 
-        "form": "", #root, coefs, taylor_approx
-
-        "distance_calculation": 4, #see options of get_distance function in RFA_fractals.py
+    def __init__(self) -> None:
         
-        #Method parameters
-        "itermax":50,
-        "tol":1e-8,
-        "damping":complex(1.01,-.01),
+        pass
 
-        ##Julia parameters
-    }
-        try:
-            obj=IMAGE(param)
-            obj.Fractal_image(param)
-            print("raster image: ",param["raster_image"])
+    ### PALETTE PROPERTIES ###
+    def set_parameters(self,param):
+        pass
+
+    
+    ### COLOUR TRANSFORMATIONS ###
+    def rgb_to_hex(self,rgb):
+        hex_color = "#{:02X}{:02X}{:02X}".format(rgb[0], rgb[1], rgb[2])
+        return hex_color
+    
+    def hex_to_rgb(self,hex_color):
+        hex_color = hex_color.lstrip('#')
+        r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        return (r, g, b)
+    
+    def rgb_to_hsv(self,r, g, b):
+        max_val = max(r, g, b)
+        min_val = min(r, g, b)
+        delta = max_val - min_val
+
+        # Hue calculation
+        if delta == 0:
+            h = 0
+        elif max_val == r:
+            h = ((g - b) / delta) % 6
+        elif max_val == g:
+            h = (b - r) / delta + 2
+        else:
+            h = (r - g) / delta + 4
+        h /= 6
+
+        # Saturation calculation
+        if max_val == 0:
+            s = 0
+        else:
+            s = delta / max_val
+
+        # Value calculation
+        v = max_val
+
+        return h, s, v
+    def hsv_to_rgb(self,h, s, v):
+        i = int(h * 6)
+        f = h * 6 - i
+        p = v * (1 - s)
+        q = v * (1 - f * s)
+        t = v * (1 - (1 - f) * s)
+        i %= 6
+
+        if i == 0:
+            r, g, b = v, t, p
+        elif i == 1:
+            r, g, b = q, v, p
+        elif i == 2:
+            r, g, b = p, v, t
+        elif i == 3:
+            r, g, b = p, q, v
+        elif i == 4:
+            r, g, b = t, p, v
+        elif i == 5:
+            r, g, b = v, p, q
+
+        return r, g, b
+
+    def lerp_color(self,color1, color2, t):
+        r = int((1 - t) * color1[0] + t * color2[0])
+        g = int((1 - t) * color1[1] + t * color2[1])
+        b = int((1 - t) * color1[2] + t * color2[2])
+        return (r, g, b)
+
+    def complementary_color(self,color):
+        """
+        
+        """
+
+        if type(color) == str: #if hex
+            hex_color = color
+            rgb_color = self.hex_to_rgb(hex_color)
+            comp_rgb = tuple(255 - val for val in rgb_color)
+            return self.rgb_to_hex(comp_rgb)
+        elif type(color) == tuple: #if rgb
+            rgb_color = color
+            comp_rgb = tuple(255 - val for val in rgb_color)
+            return comp_rgb
+    
+    ### LIST HANDLER ###
+    def blend_colors(self,color1, color2, alpha):
+        return (
+            int((1 - alpha) * color1[0] + alpha * color2[0]),
+            int((1 - alpha) * color1[1] + alpha * color2[1]),
+            int((1 - alpha) * color1[2] + alpha * color2[2])
+        )
+
+    ### PALETTE GENERATION ###
+    def create_uniform_colormap(self,colors):
+        # Convert the colors from hex to RGB format in the range 0 to 1
+        rgb_colors = [self.hex_to_rgb(color) for color in colors]
+
+        # Convert the colors to CIELab space
+        colors_CIELab = [cspace_converter("sRGB1", "CIELab")(color) for color in rgb_colors]
+
+        # Create a sequence in CIELab space to represent uniform color progression
+        uniform_sequence_CIELab = np.linspace(colors_CIELab[0], colors_CIELab[-1], len(colors))
+
+        # Use a KDTree to find the closest matching color from the original colors to the uniform sequence
+        tree = cKDTree(colors_CIELab)
+        uniform_colors_index = tree.query(uniform_sequence_CIELab, k=1)[1]
+
+        # Reorder the original colors based on the indices found
+        uniform_colors = [colors[i] for i in uniform_colors_index]
+
+        return uniform_colors
+    def create_perceptually_uniform_palette(self,colors, steps=256):
+        # Convert the colors from hex to RGB format in the range 0 to 1
+        rgb_colors = [self.hex_to_rgb(color) for color in colors]
+
+        # Convert the RGB colors to CIELab using the predefined conversion path
+        colors_cielab = [cspace_convert(color, start="sRGB255", end="CIELab") for color in rgb_colors]
+        # Create a tree from the converted colors
+        tree = cKDTree(colors_cielab)
+        
+        # Interpolate between the colors in CIELab space
+        interpolated_colors_cielab = []
+        for i in range(steps):
+            t = i / (steps - 1)
+            indices = tree.query([colors_cielab[0] * (1 - t) + colors_cielab[-1] * t], k=2)[1][0]
+            weights = 1 - tree.query([colors_cielab[0] * (1 - t) + colors_cielab[-1] * t], k=2)[0][0]
+            color = colors_cielab[indices[0]] * weights[0] + colors_cielab[indices[1]] * (1 - weights[1])
+            interpolated_colors_cielab.append(color)
+
+        # Convert the interpolated colors back to sRGB space and then to hex format
+        hex_colors = [cspace_convert(color, start="CIELab", end="sRGB255").tolist() for color in interpolated_colors_cielab]
+        hex_colors = ['#%02x%02x%02x' % (int(color[0]*255), int(color[1]*255), int(color[2]*255)) for color in hex_colors]
+
+        return hex_colors
+
+    def create_blended_palette(self,original_palette, accent_method):
+        blended_palette = []
+
+        if type(original_palette[0]) == str: #if hex
+            original_palette = [self.hex_to_rgb(color) for color in original_palette]
+        else: #if rgb or rgba
+            original_palette = original_palette
+        
+        if type(accent_method[0]) == str: #if hex
+            accent_method = [self.hex_to_rgb(color) for color in accent_method]
+        else: #if rgb or rgba
+            accent_method = accent_method
+
+        for i in range(len(original_palette)):
+            original_color = original_palette[i]
+            accent_color = accent_method[i % len(accent_method)]  # Repeating accents if needed
+
+            alpha = i/len(original_palette)
+            blended_color = self.blend_colors(original_color, accent_color, alpha)
+            blended_palette.append(self.rgb_to_hex(blended_color))
+
+        return blended_palette
+
+    def create_palette_from_colours(self, rgb_colors, num_steps):
+        """
+        Generate a palette from a short list of colors
+        """
+        num_colors = len(rgb_colors)
+
+        # define number of steps between each color from num_steps and num_colors
+        inter_num_steps = int(num_steps / (num_colors - 1))
+        step_size = 1/inter_num_steps
+
+        palette = [rgb_colors[0]]
+
+        for i in range(1, num_colors - 1):
+            for j in range(inter_num_steps):
+                t = j * step_size
+                interpolated_color = self.lerp_color(rgb_colors[i], rgb_colors[i + 1], t)
+                palette.append(interpolated_color)
+
+        palette.append(rgb_colors[-1])
+        return palette
+
+    def create_palette_from_image(self,image):
+        """
+        Generate a palette from an image (path, array or PIL image)
+
+        from https://kylermintah.medium.com/coding-a-color-palette-generator-in-python-inspired-by-procreate-5x-b10df37834ae
+        """
+        def fetch_image(image_path):
+            try:
+                img = PILIM.open(image_path)
+                return img
+            except:
+                print("Image not found")
+                sys.exit()
+
+        # Extract image 
+        if type(image) == str: #if image is a path
+            img = fetch_image(image)
+        else: #if image is an image
+            if type(image) == PILIM.Image: #if PIL image
+                img = image
+            else:
+                img = PILIM.fromarray(image)
+                #img = image
+        #output: PIL image
+        
+        def extract_colors(img):
+            colors, pixel_count = extc.extract_from_image(img)
+            return colors
+        colors = extract_colors(img)
+        #output: array of tuples (RGB, count)
+
+        # format array of tuples to list of RGB
+        colors = [color[0] for color in colors]
+        num_steps = len(colors)+10
+
+        self.image_palette = self.create_palette_from_colours(colors, num_steps)
+
+        # Create palette
+        #colors = self.create_perceptually_uniform_palette(colors)
+
+        palette = self.create_palette_from_colours(colors, num_steps)
+        #rgb_to_hex
+        palette = [self.rgb_to_hex(color) for color in palette]
+
+        return palette
+
+    def create_complementary_palette(self,hex_colors):
+        """
+        Generate a complementary palette from a palette
+        """
+        complementary_palette = []
+    
+        for hex_color in hex_colors:
+            comp_color = self.complementary_color(hex_color)
+            complementary_palette.append(comp_color)
+    
+        return complementary_palette
+
+    def create_triadic_palette(self,colors):
+        triadic_color_1 = []
+        triadic_color_2 = []
+        for color in colors:
+            # Convert the selected color to RGB if it's in HEX
+            if isinstance(color, str):
+                color = self.hex_to_rgb(color)
+
+            # Convert the RGB color to HSV
+            h, s, v = self.rgb_to_hsv(*color)
+
+            # Generate two additional colors by adding 120 degrees in the hue component
+            triadic_colors = [self.hsv_to_rgb((h + offset) % 1, s, v) for offset in [0, 1/3, 2/3]]
+            
+            #convert to int
+            triadic_colors = [tuple(int(val) for val in color) for color in triadic_colors]
+
+            # Convert the triadic colors to hex
+            triadic_color_1.append(self.rgb_to_hex(triadic_colors[1]))
+            triadic_color_2.append(self.rgb_to_hex(triadic_colors[2]))
+
+        return triadic_color_1, triadic_color_2
+    
+    def create_analogous_palette(self,colors, hue_shift=30):
+        analogous_palette = []
+
+        for color in colors:
+            # Check if the color is given in hex format and convert to RGB
+            if isinstance(color, str) and color.startswith("#"):
+                color = self.hex_to_rgb(color)
+
+            # Normalize RGB to [0, 1] range
+            color = [x/255 for x in color]
+
+            # Convert RGB to HSV
+            h, s, v = colorsys.rgb_to_hsv(*color)
+
+            # Shift the hue by the specified angle (in degrees)
+            h = (h + hue_shift/360) % 1
+
+            # Convert back to RGB
+            analogous_color = colorsys.hsv_to_rgb(h, s, v)
+
+            # Denormalize RGB to [0, 255] range
+            analogous_color = [int(x*255) for x in analogous_color]
+
+            analogous_palette.append(self.rgb_to_hex(analogous_color))
+
+        return analogous_palette
+
+    def create_split_complementary_palette(self,colors, hue_shift=30):
+        split_complementary_palette_1 = []
+        split_complementary_palette_2 = []
+
+        for color in colors:
+            # Check if the color is given in hex format and convert to RGB
+            if isinstance(color, str) and color.startswith("#"):
+                color = self.hex_to_rgb(color)
+
+            # Normalize RGB to [0, 1] range
+            color = [x/255 for x in color]
+
+            # Convert RGB to HSV
+            h, s, v = colorsys.rgb_to_hsv(*color)
+
+            # Find the complementary hue
+            complementary_hue = (h + 0.5) % 1
+
+            # Find the split complementary hues by shifting the complementary hue
+            split_hue1 = (complementary_hue + hue_shift/360) % 1
+            split_hue2 = (complementary_hue - hue_shift/360) % 1
+
+            # Convert back to RGB
+            split_color1 = [int(x*255) for x in colorsys.hsv_to_rgb(split_hue1, s, v)]
+            split_color2 = [int(x*255) for x in colorsys.hsv_to_rgb(split_hue2, s, v)]
+
+            split_complementary_palette_1.append(self.rgb_to_hex(split_color1))
+            split_complementary_palette_2.append(self.rgb_to_hex(split_color2))
+
+        return split_complementary_palette_1, split_complementary_palette_2
+
+    def create_tetradic_palette(self,colors):
+        tetradic_palette = []
+
+        for color in colors:
+            # Check if the color is given in hex format and convert to RGB
+            if isinstance(color, str) and color.startswith("#"):
+                color = self.hex_to_rgb(color)
+
+            # Normalize RGB to [0, 1] range
+            color = [x/255 for x in color]
+
+            # Convert RGB to HSV
+            h, s, v = colorsys.rgb_to_hsv(*color)
+
+            # Create the tetradic hues
+            tetradic_hues = [(h + i/4) % 1 for i in range(4)]
+
+            # Convert back to RGB
+            tetradic_colors = [colorsys.hsv_to_rgb(hue, s, v) for hue in tetradic_hues]
+
+            # Denormalize RGB to [0, 255] range, convert to hex
+            tetradic_colors = [self.rgb_to_hex(tuple(int(x*255) for x in color)) for color in tetradic_colors]
 
 
-            # Uncomment to plot 10 images with different cmap
-            #for j in range(10):
-            #    obj.cmap=np.random.choice(cmap_dict)
-            #    print(f"cmap{j}: ",obj.cmap)
-            #    obj.Plot(obj.shaded,param["image_name"]+f"_{j}",param["temp_dir"],print_create=False)
+            tetradic_palette.append(tetradic_colors)
 
-        except KeyboardInterrupt:
-            sys.exit()
-        #print("\nseconds: " ,(time.time() - new_time))
-        i+=1
-    print("----------------- {}.{:02d} min -----------------".format(int((time.time() - start_time)//60), int((time.time() - start_time)%60)))
+
+        #[[1,2,3,4],[1,2,3,4]] -> [[1,1],[2,2],[3,3],[4,4]]
+        tetradic_palette = list(zip(*tetradic_palette))
+        return tetradic_palette[0], tetradic_palette[1], tetradic_palette[2], tetradic_palette[3]
+
+    def create_shades_palette(self,colors, steps=5):
+        shades_palette = []
+
+        for color in colors:
+            # Check if the color is given in hex format and convert to RGB
+            if isinstance(color, str) and color.startswith("#"):
+                color = self.hex_to_rgb(color)
+
+            # Normalize RGB to [0, 1] range
+            color = [x/255 for x in color]
+
+            # Convert RGB to HSV
+            h, s, v = colorsys.rgb_to_hsv(*color)
+
+            # Create shades by varying the value
+            shades_colors = [colorsys.hsv_to_rgb(h, s, v * (i/steps)) for i in range(steps+1)]
+
+            # Denormalize RGB to [0, 255] range
+            shades_colors = [self.rgb_to_hex(tuple(int(x*255) for x in color)) for color in shades_colors]
+
+            shades_palette+=shades_colors
+
+        return shades_palette
+   
+    def create_accents_palette(self,palette, accent_method):
+        '''
+        Generate an accents palette by blending method and gives uniformity to the palette
+
+        Args:
+            palette (list): list of colors hex
+            accent_method (str): combination of "complementary", "triadic", "analogous", "split_complementary", "tetradic", "shades"
+        '''
+        
+        if "complementary" in accent_method:
+            palette += self.create_blended_palette(palette, self.create_complementary_palette(palette))
+        if "triadic" in accent_method:
+            palette += self.create_blended_palette(palette, self.create_triadic_palette(palette)[0])
+            palette += self.create_blended_palette(palette, self.create_triadic_palette(palette)[1])
+        if "analogous" in accent_method:
+            palette += self.create_blended_palette(palette, self.create_analogous_palette(palette))
+        if "split_complementary" in accent_method:
+            palette += self.create_blended_palette(palette, self.create_split_complementary_palette(palette)[0])
+            palette += self.create_blended_palette(palette, self.create_split_complementary_palette(palette)[1])
+        if "tetradic" in accent_method:
+            palette += self.create_blended_palette(palette, self.create_tetradic_palette(palette)[0])
+            palette += self.create_blended_palette(palette, self.create_tetradic_palette(palette)[1])
+            palette += self.create_blended_palette(palette, self.create_tetradic_palette(palette)[2])
+            palette += self.create_blended_palette(palette, self.create_tetradic_palette(palette)[3])
+        if "shades" in accent_method:
+            palette += self.create_blended_palette(palette, self.create_shades_palette(palette))
+
+        return palette
+ 
+    def get_seaborn_cmap(self,palette_or_colors):
+
+        if isinstance(palette_or_colors, str):
+            # If a string (palette name) is provided, directly use it to get the Seaborn colormap
+            cmap = sns.color_palette(palette_or_colors).as_hex()
+        else:
+            # If a list of colors is provided, we'll use it to create a colormap
+            if all(isinstance(color, str) and color.startswith("#") for color in palette_or_colors):
+                hex_colors = palette_or_colors
+            else:
+                # If colors are provided in RGB, convert them to hex
+                hex_colors = [mcolors.to_hex(color) for color in palette_or_colors]
+            
+            # Create a colormap using Seaborn with the provided hex colors
+            cmap = sns.color_palette(hex_colors).as_hex()
+
+        return cmap
+    
+    def get_matplotlib_cmap(self,palette_or_colors):
+        if isinstance(palette_or_colors, str):
+            # If a string (palette name) is provided, use it to get the Matplotlib colormap
+            cmap = plt.get_cmap(palette_or_colors)
+            hex_colors = [mcolors.to_hex(cmap(i)) for i in range(cmap.N)]
+        else:
+            # If a list of colors is provided, convert them to hex if needed
+            hex_colors = [mcolors.to_hex(color) if isinstance(color, tuple) else color for color in palette_or_colors]
+
+        return hex_colors
+    
+    ### RENDER ###
+    def cmap_from_list(self,color_list, cmap_name="my_cmap"):
+        """ Create a matplotlib colormap objectfrom a list of colors
+
+        Args:
+            colors (list): list of colors hex
+
+        Returns:
+            matplotlib.colors.ListedColormap: colormap
+        """
+        if type(color_list[0]) == str: #if hex
+            color_list = [self.hex_to_rgb(color) for color in color_list]
+            color_list = [(r/255, g/255, b/255) for r, g, b in color_list]
+        else: #rgb or rgba
+            pass
+        cmap=mcolors.LinearSegmentedColormap.from_list(cmap_name,color_list,N=256)
+        cm.register_cmap(name=cmap_name, cmap=cmap)
+
+
+        return cmap_name
+    
+    def render_color_palette(self,hex_colors, palette_name = "palette"):
+        num_colors = len(hex_colors)
+        color_map = []
+        
+        for hex_color in hex_colors:
+            color_map.append(self.hex_to_rgb(hex_color) if type(hex_color) == str else hex_color)
+        fig, ax = plt.subplots(figsize=(num_colors * 0.5, 1))  # Adjust the figure size
+        
+        # Create a color bar with the specified hex colors
+        cb = plt.colorbar(matplotlib.cm.ScalarMappable(norm=None, cmap=mcolors.ListedColormap(color_map)),
+                        cax=ax, orientation='horizontal', ticks=[])
+        cb.outline.set_visible(False)
+        
+        plt.savefig("images/"+palette_name + ".png", bbox_inches='tight', pad_inches=0, transparent=True)
+        plt.close()
+
+        return PILIM.open("images/"+palette_name + ".png")
+
+    def stack_palettes(self,palette1, palette2, multiple_palette1 = False):
+        # Create an instance of your class (replace 'YourClassName' with the actual name)
+        colour_obj = COLOUR()
+        
+        # Render the two palettes using the existing function
+        if multiple_palette1: # we want to stack multiple palettes
+            palette1_image = PILIM.open("images/palettes.png")
+        
+        else:
+            palette1_image = colour_obj.render_color_palette(palette1, palette_name="palette1")
+        palette2_image = colour_obj.render_color_palette(palette2, palette_name="palette2")
+        
+        # Stack the two images vertically
+        stacked_image = PILIM.new('RGB', (palette1_image.width, palette1_image.height + palette2_image.height))
+        stacked_image.paste(palette1_image, (0, 0))
+        stacked_image.paste(palette2_image, (0, palette1_image.height))
+
+        # Save the image
+        stacked_image.save("images/palettes.png")
+
+        #delete images
+        if not multiple_palette1:
+            os.remove("images/palette1.png")
+        os.remove("images/palette2.png")
+        
+        return PILIM.open("images/palettes.png")
+
+    def get_colors_from_cmap(self,cmap_name, n_colors=256):
+        cmap = plt.get_cmap(cmap_name)
+        colors = [cmap(i) for i in range(n_colors)]
+        return colors
+
+
+def COLOUR_wrapper(palette_name,method = "accents",simple_cmap = False,**kwargs):
+    """
+    Wrapper for the COLOUR.create_palette_from_image func. Depending on the method args
+    more function can be called
+
+    Args:
+        palette_name (str): path to image or name of the palette
+        method (str): method(s) name (seaborn, matplotlib, accents,)
+        **kwargs: method args
+    """
+    accent_method = kwargs.pop('accent_method', "complementary")
+    simple_cmap = kwargs.pop('simple_cmap', False)
+
+    c_obj = COLOUR()
+    
+    if method == "seaborn":
+        palette = c_obj.get_seaborn_cmap(palette_name)
+    elif method == "matplotlib":
+        palette = c_obj.get_matplotlib_cmap(palette_name)
+    elif method == "accents":
+        #open image
+        img = np.asarray(PILIM.open(palette_name))
+
+        #create cmap
+        palette = c_obj.create_palette_from_image(img)
+
+        palette = c_obj.create_accents_palette(palette,accent_method=accent_method)
+
+        palette = c_obj.create_perceptually_uniform_palette(palette, steps = 256-len(palette) if len(palette)<256 else 2)
+        palette = c_obj.create_uniform_colormap(palette)
+
+    if simple_cmap:
+        palette=c_obj.create_palette_from_image(np.asarray(c_obj.render_color_palette(palette, "palettes")))
+    else:
+        pass
+
+    cmap_name=c_obj.cmap_from_list(palette)
+
+    return cmap_name
+

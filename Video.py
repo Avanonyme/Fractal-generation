@@ -63,8 +63,7 @@ class VIDEO():
         self.duration=param["duration"]
         self.nb_frames = param["nb_frames"]
 
-        temp_im = IMAGE(param)
-        self.cmap = temp_im.cmap
+        self.cmap = param["cmap"]
 
         self.frac_boundary = []
 
@@ -122,7 +121,22 @@ class VIDEO():
             img = img.astype(dtype)
             new_img_list.append(img)
         return new_img_list
-        
+    
+    def create_disk_mask(self,diameter, shape):
+        # Determine the center of the disk
+        center_y, center_x = shape[0] // 2, shape[1] // 2
+
+        # Create an array of indices representing the grid
+        y, x = np.ogrid[:shape[0], :shape[1]]
+
+        # Calculate the squared distance from each point to the center
+        distance_squared = (x - center_x)**2 + (y - center_y)**2
+
+        # Create the mask where points with squared distance less than or equal to (diameter/2)^2 are True
+        mask = distance_squared <= (diameter/2)**2
+
+        return mask
+    
     def paste_image(self, path_background, path_foreground,img_alpha):
         # Read the bckg image
         if isinstance(path_background, str):
@@ -150,25 +164,34 @@ class VIDEO():
 
         return np.array(bckg)
     ### VIDEO MAKER ###
-    def Video_maker(self,param, im_path_2=None, **kwargs):
+    def Video_maker(self,param, im_path_2=None,img_obj = None ,**kwargs):
         if self.verbose:
             print("Video maker (V-vm)...",end="")
 
         anim = param["anim"]
+        print("ANIMATION PARAM",anim)
 
         ## inputs: param
-        if "zoom" or "translate" or "shading" in anim:
+        if ("zoom" in anim )or ("translate" in anim) or ("shading" in anim):
             frame_list = self.Zoom_and_Translate(param, animation = anim, **param["zoom_param"], **param["translation_param"])
 
         else:
-            img_obj = IMAGE(param)
-            frame_list = img_obj.Fractal_image()
-            self.frac_boundary = img_obj.frac_boundary
+            if img_obj is None:
+                img_obj = IMAGE(param)
+                frame_list = img_obj.Fractal_image()
+                frame_list = (self.normalize(img_obj.z)*255).astype(np.uint8)
+                self.frac_boundary = [img_obj.frac_boundary]
+            else:
+                frame_list = (self.normalize(img_obj.z)*255).astype(np.uint8)
+                #test
+                self.frac_boundary = [img_obj.frac_boundary]
         ## outputs: frame_list
 
         ## inputs: image or frame_list
         if "pulsing" in anim:
+            print(np.max(self.frac_boundary[0]))
             frame_list = self.Pulsing(frame_list,self.frac_boundary, **param["pulsing_param"])
+            imageio.mimsave("test/pulsing.gif", frame_list, fps=param["fps"])
         if "flicker" in anim:
             frame_list = self.Flicker(frame_list,**param["flicker_param"])
         
@@ -178,15 +201,20 @@ class VIDEO():
             frame_list = self.Explosion(frame_list, im_path_2, **param["explosion_param"])
         ## outputs: frame_list
 
-        # zoom in image
+        # zoom in image, replace explosion and grain
+        # NOT IMPLEMENTED
         if "zoom_in" in anim:
             frame_list = self.Zoom_in(frame_list, **param["zoom_in_param"])
 
         ## make video
+        #add colormap
+
+        #save video
         
         if self.verbose:
             print("Done (V-vm)")
-
+        
+        return frame_list
 
     ### ANIMATIONS ###
     def Explosion(self,img_obj,im_path_2=None, **kwargs):
@@ -318,15 +346,15 @@ class VIDEO():
         # Hide center from gfilter
         mask=np.ones((width,height))
         mask[border_thickness:-border_thickness,border_thickness:-border_thickness]=0
-        mask_border=np.copy(mask)
+        mask_border=np.logical_not(self.create_disk_mask(mask.shape[0] - 2 * border_thickness, shape = (mask.shape[0], mask.shape[1])))
 
         #smaller mask
         small_gfilter=np.ones((width,height))
         border_thickness_small=border_thickness//2
         small_gfilter[border_thickness_small:-border_thickness_small,border_thickness_small:-border_thickness_small]=0
 
-        gfilter=do_grain(mask_border,fill_value=0.3,distance_exponent=distance_exponent_big)
-        small_gfilter=do_grain(small_gfilter,fill_value= 0.1,distance_exponent=distance_exponent_small)
+        gfilter=do_grain(mask_border,fill_value=0.05,distance_exponent=distance_exponent_big)
+        small_gfilter=do_grain(small_gfilter,fill_value= 0.05,distance_exponent=distance_exponent_small)
 
         small_gfilter=small_gfilter.astype(bool)
         # Apply the granular gfilter on the distance transform
@@ -352,7 +380,7 @@ class VIDEO():
 
                 new_gfilter = np.clip(new_gfilter,0,1.2)
 
-                new_img=image * new_gfilter
+                new_img=image  * new_gfilter
             
                 frame_list.append((self.normalize(new_img) * 255).astype(np.uint8))
 
@@ -523,7 +551,6 @@ class VIDEO():
         # get the parameters
         beta = kwargs.get("beta",-0.3)
         decal = kwargs.get("decal",0)
-        cmap = kwargs.get("cmap",self.cmap)
         omega = kwargs.get("oscillation_frequency",np.pi)
         amplitude = kwargs.get("amplitude",1)
         c = kwargs.get("c",None)
@@ -588,7 +615,7 @@ class VIDEO():
                 #new_im = (self.normalize(wave_im + img_obj[step]) * 255).astype(np.uint8)
 
             else: #single image
-                wave_im = (((Psi * Mask) * fractal_bounds[0] * 255)).astype(np.uint8)
+                wave_im = (((Psi * Mask) * fractal_bounds[0])*255).astype(np.uint8)
                 
                 img = (img * 255/np.max(img)) # image always appears
                 
@@ -685,7 +712,6 @@ class VIDEO():
             # update parameters
             #_==0
             if _ == 0:
-                print("Zoom and Translate and Shading",_,end="")
                 param["form"]=None
                 param["random"]=False #True only for first frame at most
                 param["pts"] = [0,0]
@@ -702,12 +728,11 @@ class VIDEO():
                 zoom_speed = zoom_speed/zoom_speed_factor
                 param["domain"],param["pts"]=check_coord(im,Imobj.frac_boundary,param["dpi"],param["domain"],zoom_speed,prev_point=param["pts"])
             if "translate" in animation:
-                print('kespass')
                 param["damping"]=damping_list[_]
 
             
             #save frames
-            if "zoom" or "translate" in animation:
+            if "zoom" in animation or "translate" in animation:
                 self.frac_boundary.append(Imobj.frac_boundary)
 
             if "shading" in animation:
@@ -783,73 +808,3 @@ class VIDEO():
         if self.verbose:
             print("Done (Vm Dynamic_shading)")
         return frame_list
-        
-        
-if __name__=='__main__':
-    i=0
-    cmap_dict = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
-                  'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
-                  'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn',
-                  'spring', 'summer', 'autumn', 'winter', 'cool','Wistia',
-                  'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy', 'RdBu', 'RdYlBu']
-    
-    raster_image_list=["circle","circle2","fire","human","eyes","planet","stars"]
-
-    param={
-    #### General parameters
-    "clean_dir":False, #clean image dir before rendering
-    "verbose":False, #print stuff
-    "test":True, #for trying stuff and knowing where to put it
-    "media_form":"video", #image or video
-
-    #### Animation parameters
-    "anim method":"explosion", #pulsing, zoom, translation, rotation
-    "frame_number":1,
-    "frame_size": 2160,
-    "fps":20 ,
-    "duration":3, #seconds
-    "zoom":1.2, #if animation method is zoom 
-
-    #### Image parameters
-    #General
-    "cmap":np.random.choice(cmap_dict), #for testing only   
-    "dir": "images",
-    "file_name": f"test{i}",
-    "raster_image":np.random.choice(raster_image_list), # if None, raster image is np.zeros((size,size))
-    "dpi":500,
-    #Colors
-    "color_list":[],
-
-    #Shading
-    "shading":True,
-    "lights": (45., 0, 40., 0, 0.5, 1.2, 1),
-    #Filters
-
-    #### Fractal parameters
-    "method": "RFA Newton",
-    "size": 500,
-    "domain":np.array([[-1.,1.],[-1.,1.]]),
-    ## RFA paramters
-    "random":True,
-    # Polynomial parameters (Must have value if random==False)
-    "degree": None, #random.randint(5,20),
-    "func": None,#[1,-1/2+np.sqrt(3)/2*1j,-1/2-np.sqrt(3)/2*1j,1/2+np.sqrt(3)/2*1j,1/2-np.sqrt(3)/2*1j], 
-    "form": "", #root, coefs, taylor_approx
-
-    "distance_calculation": 4, #see options of get_distance function in RFA_fractals.py
-    
-    #Method parameters
-    "itermax":50,
-    "tol":1e-8,
-    "damping":complex(0.2,-.01),
-
-    ##Julia parameters
-}
-
-    try:
-        obj=VIDEO(param)
-        obj.Video_maker(param)
-
-    except KeyboardInterrupt:
-        sys.exit()
-        
