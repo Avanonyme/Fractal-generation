@@ -273,7 +273,6 @@ class RFA_fractal():
         tol: scalar,tolerance for convergence
         max_steps: scalar,maximum number of iterations
         damping: complex number,damping factor
-        Orbit_trap: boolean, if True, add a filter to check if point is in orbit
         orbit_form: binary mask of shape (N,N).
         verbose: boolean, if True, print progress
         """
