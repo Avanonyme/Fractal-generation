@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.cm as cm
 
+from DaskOwnerFractalGenerator import IMAGE_wrapper_for_fractal
+
 matplotlib_cmap = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
                 'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
                 'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn',
@@ -34,6 +36,7 @@ param={
 
                 ## Colour parameters
                         #Colors
+        "cmap": "viridis", #test only
         "palette_name":"viridis", #name from cmap_dict, or im_path for custom palette from image
         "color_args":{"method": "matplotlib", #accents, matplotlib, seaborn
                       "simple_palette":False,# if True, nb of colors is scaled down to range(1,10)
@@ -80,7 +83,7 @@ param={
                 },
         #### Image parameters
         #General
-        "Image":{"dpi":1000,
+        "Image":{"dpi":2000,
                  "return type": "iteration", #iteration, distance, boundary
 
                  "temp_dir": "images", #where to put temporary images, if test is True
@@ -92,16 +95,16 @@ param={
                         "norm": colors.PowerNorm(0.3),     
                         "nb_rotation": 0.5, #for Dynamic_shading anim
                                 },
-                "verbose": False,
+                "verbose": True,
                 },
         
         #### Fractal parameters
         "Fractal":{"method": "RFA Newton", #RFA Newton, RFA Halley, 
-                "raster_image":np.random.choice(raster_image_list), # if None, raster image is np.zeros((size,size))
+                "raster_image":"stars", # if None, raster image is np.zeros((size,size))
 
-                "size": 1000,
+                "size": 2000,
                 "domain":np.array([[-1,1],[-1,1]]),
-                "verbose":True,
+                "verbose":False,
 
                 ## RFA parameters
                 "random":True,
@@ -113,8 +116,8 @@ param={
                 "distance_calculation": 4, #see options of get_distance function in RFA_fractals.py
 
                 #Newton, Halley
-                "itermax":60,
-                "tol":1e-8,
+                "itermax":30,
+                "tol":1e-5,
                 "damping":complex(1.01,-.01),
 
                 ## Julia parameters
@@ -125,54 +128,8 @@ param={
         
 }
 
-def chunk_to_memmap(arr, chunk_size, directory="memmap_chunks"):
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-    
-    if len(arr.shape) != 2 or arr.shape[0] != arr.shape[1]:
-        raise ValueError("The input array should be a 2D square array.")
-    
-    if chunk_size > arr.shape[0]:
-        raise ValueError("Chunk size should be less than or equal to the array size.")
-
-    chunk_files = []
-    chunk_indices = []
-
-    for i in range(0, arr.shape[0], chunk_size):
-        for j in range(0, arr.shape[1], chunk_size):
-            chunk = arr[i:i+chunk_size, j:j+chunk_size]
-            filename = os.path.join(directory, f"chunk_{i}_{j}.dat")
-            
-            mmapped_chunk = np.memmap(filename, dtype=arr.dtype, mode='w+', shape=chunk.shape)
-            mmapped_chunk[:] = chunk[:]
-            mmapped_chunk.flush()
-            
-            chunk_files.append(filename)
-            chunk_indices.append((i, j))
-            
-    return chunk_files, chunk_indices
-
-def reassemble_from_memmap(chunk_files, chunk_indices, output_shape,chunk_shape ,dtype):
-    reassembled_array = np.empty(output_shape, dtype=dtype)
-
-    for filename, (i, j) in zip(chunk_files, chunk_indices):
-        mmapped_chunk = np.memmap(filename, dtype=dtype, mode='r', shape=chunk_shape)
-        shape = mmapped_chunk.shape
-        reassembled_array[i:i+shape[0], j:j+shape[1]] = np.array(mmapped_chunk).reshape(shape)
-
-    return reassembled_array
-# Create a 4x4 array
-arr = np.array([[1, 2, 3, 4],
-                [5, 6, 7, 8],
-                [9, 10, 11, 12],
-                [13, 14, 15, 16]],dtype=np.float64)
-
-# Chunk the array and get the filenames and indices
-chunk_files, chunk_indices = chunk_to_memmap(arr, 2)
-
-# Reassemble the array
-reassembled_array = reassemble_from_memmap(chunk_files, chunk_indices, arr.shape, (2,2), arr.dtype)
-
-# Validate that the original and reassembled arrays are the same
-print(reassembled_array)
-print(np.allclose(arr, reassembled_array))  # Should output True
+import time
+start = time.time()
+img_test, z = IMAGE_wrapper_for_fractal(param)
+end = time.time()
+print(end - start)

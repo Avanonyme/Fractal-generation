@@ -1,21 +1,9 @@
 
-import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import random as rd
 from scipy.ndimage import distance_transform_edt
 from skimage.filters import threshold_mean, butterworth
 import itertools as it
-
-#plot handling
-def plot(array,name,cmap=LinearSegmentedColormap.from_list("lambdacmap",["black","white"],N=2),dpi=1000):
-    fig = plt.figure(frameon=False)
-    fig.set_size_inches(1,1)    
-    ax = plt.Axes(fig, [0., 0., 1., 1.])
-    ax.set_axis_off()
-    fig.add_axes(ax)
-    ax.imshow(array,cmap=cmap)
-    fig.savefig(f"{name}.png",dpi=dpi)
 
 class Polynomials():
     def __init__(self,func=[],random_poly=True,form="root",**kwargs):
@@ -222,6 +210,9 @@ class RFA_fractal():
         if config["verbose"]:
             print("Initializing RFA fractal...Done")
 
+        # for boundary
+        self.convergence = u1.real
+
     def init_array(self,N,domain):
         """create array of complex numbers"""
         real_dom=np.linspace(domain[0,0],domain[0,1],N,endpoint=False) #expanded domain
@@ -263,80 +254,56 @@ class RFA_fractal():
 
         return distance.flatten()
 
-    def Newton_method(self,array,func,dfunc,d2func,tol=1e-08,max_steps=100,damping=1,orbit_form=None,verbose=True):
-        """
-        Newton method for Nova Fractal
+    def Newton_method(self, array, func, dfunc, d2func, tol=1e-08, max_steps=100, damping=1, distance_map=None, verbose=True):
         
-        array: array of complex numbers, such that f''(z)=0
-        func: poly function to be iterated
-        dfunc: derivative of poly function
-        tol: scalar,tolerance for convergence
-        max_steps: scalar,maximum number of iterations
-        damping: complex number,damping factor
-        orbit_form: binary mask of shape (N,N).
-        verbose: boolean, if True, print progress
-        """
         if verbose:
-            print("RFA-Newton method...",end="\r")
-        #initialisation
-        if orbit_form is None:
-            orbit_form = np.ones_like(array,dtype=bool)
-        shape=array.shape        
-        z=array.copy().flatten() #such that f''(z)=0
-        prec=np.ones_like(z) #precision
-        activepoint=np.ones_like(z)  #used to stop points that attained required precision
-        i=0 #count, used to calculate the fractal
-        ziter=np.zeros_like(z)
-        dz=np.ones_like(z)
+            print("Optimized RFA-Newton method...", end="\r")
 
+        shape = array.shape
+        z = array.flatten()
+        prec = np.ones_like(z)
+        active_point = np.ones_like(z, dtype=bool)
+        ziter = np.zeros_like(z)
+        dz = np.ones_like(z)
+        dist = np.full_like(z, 1e20)
 
-        dist=1e20*np.ones_like(z)
-        
-        distance_map = distance_transform_edt(np.logical_not(orbit_form))# Compute the distance map
-        distance_map=np.divide(distance_map, abs(distance_map), out=np.zeros_like(distance_map), where=distance_map!=0)
-
-
-
-        #Newton Method
-        while i<=max_steps:
-
-            #checking for points precision reaching tol 
-            e=np.where(prec<tol) #checking which points converged
-            activepoint[e]=0 #taking out those points 
-
-            ziter[e]=i #noting the count value of those points
-
-            prec[e]=100 #taking out the precision at those points
-
-            activeindex=activepoint.nonzero() #updating the active indexes
+        for i in range(1, max_steps + 1):
             
-            #Newton Method
-            dx=-damping*func(z)/dfunc(z)
-            z[activeindex]=z[activeindex]+dx[activeindex] #if nova add original array
-
-            prec[activeindex]=abs(dx[activeindex])
+            # Check for points that have reached precision
+            converged_points = prec < tol
+            if np.all(~active_point):
+                break  # All points have converged, break the loop early.
             
+            # Update active points and their iteration count
+            active_point[converged_points] = False
+            ziter[converged_points] = i
+            prec[converged_points] = 100
+
+            # Newton Method
+            dx = -damping * func(z) / dfunc(z)
+            np.add(z, dx, where=active_point, out=z)
+            np.abs(dx, out=dx)
+            np.copyto(prec, dx, where=active_point)
+
             if verbose:
-                print("RFA-Newton method...",i,end="\r")
+                print(f"Optimized RFA-Newton method...{i}", end="\r")
 
-            #Orbit Trap
-            #normal
-            dz[activeindex]*= 2-dfunc(dist[activeindex])/d2func(dist[activeindex])
-            #method: distance from shape
-
-            dist=np.minimum(dist,self.get_distance(z,distance_map))
-            i+=1
-            
-        #Assigning a value to points that haven't converged
-        ziter[activepoint==True]=i #escape method coloring
-        z[activepoint==True]=0 #Root coloring
-        z=np.around(z,4)
+            # Orbit Trap
+            if distance_map is not None:
+                dz[active_point] *= 2 - dfunc(dist[active_point]) / d2func(dist[active_point])
+                dist = np.minimum(dist, self.get_distance(z, distance_map))
+        
         if verbose:
-            print("RFA-Newton method...Done")
-        normal=dist/dz
-        z,ziter,dist,normal=z.reshape(shape),ziter.reshape(shape),dist.reshape(shape),normal.reshape(shape)
-        return ziter,z,np.sqrt(dist),normal
+            print("Optimized RFA-Newton method...Done")
 
+        z = np.around(z, 4)
+        ziter[active_point] = max_steps + 1
+
+        if distance_map is not None:
+            normal = dist / dz
+            return ziter.reshape(shape), z.reshape(shape), np.sqrt(dist).reshape(shape), normal.reshape(shape)
+        else:
+            return ziter.reshape(shape), z.reshape(shape), 0, 0
 
     def Halley_method(self,array,func,dfunc,d2func,tol=1e-08,max_steps=100,damping=1,orbit_form=None,verbose=True):
         """Halley method"""

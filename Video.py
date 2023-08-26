@@ -16,8 +16,6 @@ from skimage.feature import canny
 from skimage.morphology import disk,dilation
 
 import time
-from Image import IMAGE_wrapper_for_fractal
-
 import imageio
 
 def clean_dir(folder, verbose=False):
@@ -39,6 +37,8 @@ class VIDEO():
     def __init__(self,param) -> None:
         print("Init Videos class(V-Init) fractals...")
 
+        from DaskOwnerFractalGenerator import IMAGE_wrapper_for_fractal
+        self.IMAGE_wrapper_for_fractal = IMAGE_wrapper_for_fractal
         ### Create folders
         self.APP_DIR = os.path.dirname(os.path.abspath(__file__))
         self.IM_DIR=os.path.join(self.APP_DIR,param["Image"]["temp_dir"])
@@ -705,7 +705,7 @@ class VIDEO():
 
             print("Zoom and Translate and Shading",_,end="\r")
             #Create frame
-            Imobj, im = IMAGE_wrapper_for_fractal(param)
+            Imobj, im = self.IMAGE_wrapper_for_fractal(param)
             # update parameters
             #_==0
             if _ == 0:
