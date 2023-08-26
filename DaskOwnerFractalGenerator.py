@@ -8,11 +8,14 @@ import os
 import sys
 import json
 import dask.distributed as dd
+from concurrent.futures import ProcessPoolExecutor
+
 
 import numpy as np
 from scipy.ndimage import sobel, distance_transform_edt, binary_dilation
 from skimage.feature import canny
 import PIL.Image as PILIM
+import imageio
 
 from Video import VIDEO
 from Image import IMAGE, COLOUR
@@ -110,7 +113,31 @@ def save_memmap(array, filename, directory = None, shape = (1,1), dtype = np.flo
     mmapped_array = np.memmap(filename, dtype=dtype, mode='w+', shape=shape)
     mmapped_array[:] = array[:]
     mmapped_array.flush()
+def process_chunk(frac_obj, compute_method, array_chunk, array_dir, boundary_dir, normal_dir, chunk_size, distance_map, frac_param):
+        print(f"Computing chunk {array_chunk}...", end="\r")
+        full_chunk_path = os.path.join(array_dir, array_chunk)
+        np_chunk = np.memmap(full_chunk_path, dtype=frac_obj.array.dtype, mode='r', shape=(chunk_size, chunk_size))
 
+        # Here we call the pre-determined compute_method
+        if compute_method is not None:
+            
+            z_chunk, conv, dist_chunk, normal_chunk = compute_method(
+                np_chunk,
+                lambda z: frac_obj.poly.poly(z, frac_obj.coefs),
+                lambda z: frac_obj.poly.dpoly(z, frac_obj.coefs),
+                lambda z: frac_obj.poly.d2poly(z, frac_obj.coefs),
+                frac_param["tol"],
+                frac_param["itermax"],
+                frac_param["damping"],
+                distance_map=distance_map,
+                verbose=frac_param["verbose"],
+            )
+
+        # Save the chunks
+        save_memmap(array=z_chunk, filename=array_chunk, directory=array_dir, shape=np_chunk.shape, dtype=frac_obj.array.dtype)
+        save_memmap(array=conv, filename=array_chunk, directory=boundary_dir, shape=np_chunk.shape, dtype=conv.dtype)
+        save_memmap(array=normal_chunk, filename=array_chunk, directory=normal_dir, shape=np_chunk.shape, dtype=normal_chunk.dtype)
+    
 def VIDEO_wrapper_for_fractal(param, im_path_2=None,img_obj = None ,**kwargs):
     #create video object
     video_object = VIDEO(param)
@@ -156,18 +183,18 @@ def VIDEO_wrapper_for_fractal(param, im_path_2=None,img_obj = None ,**kwargs):
 
     if video_object.verbose:
         print("Done (V-vm)")
-    #if param["test"]:
-    #    #save video
-    #    if video_object.frame_save:
-    #        imageio.mimsave(video_object.VID_DIR + "/test.gif", frame_list, fps=video_object.fps)
-    #    else: # list of path
-    #        with imageio.get_writer(video_object.VID_DIR + "/test.gif", mode='I', fps=video_object.fps) as writer:
-    #            for image_path in frame_list:
-    #                # Read image from disk
-    #                image = imageio.imread(image_path)
-    #                
-    #                # Append the image frame to the GIF
-    #                writer.append_data(image)
+    if param["test"]:
+        #save video
+        if video_object.frame_save:
+            imageio.mimsave(video_object.VID_DIR + "/test.gif", frame_list, fps=video_object.fps)
+        else: # list of path
+            with imageio.get_writer(video_object.VID_DIR + "/test.gif", mode='I', fps=video_object.fps) as writer:
+                for image_path in frame_list:
+                    # Read image from disk
+                    image = imageio.imread(image_path)
+                    
+                    # Append the image frame to the GIF
+                    writer.append_data(image)
     return frame_list
 
 def COLOUR_wrapper(palette_name,method = "accents",**kwargs):
@@ -211,38 +238,48 @@ def COLOUR_wrapper(palette_name,method = "accents",**kwargs):
     return cmap_name
 
 def IMAGE_wrapper_for_fractal(param):
+    def init_image_object(param):
+        image_object = IMAGE(param)
 
-    image_object = IMAGE(param)
+        if image_object.verbose:
+            print("Fractal_image...", end="\r")
 
-    if image_object.verbose:
-        print("Fractal_image...", end="\r")
+        frac_param = image_object.set_fractal_parameters(param["Fractal"])
 
-    frac_param = image_object.set_fractal_parameters(param["Fractal"])
+        return image_object, frac_param
 
-    orbit_form, distance_map = None, None  # Initialize to None
-    
-    if frac_param["raster_image"]:
-        try:
-            orbit_form = np.array(
-                PILIM.open(image_object.APP_DIR + "/orbit/" + frac_param["raster_image"] + ".png",)
-                .resize((800, 800))
-                .convert("L"),
-                dtype=float,
-            )
-            distance_map = distance_transform_edt(np.logical_not(orbit_form))
-            distance_map = np.divide(
-                distance_map,
-                abs(distance_map),
-                out=np.zeros_like(distance_map),
-                where=distance_map != 0,
-            )
-        except:
-            print("Raster image not found or other issue")
+    def init_orbit_trap_computing(image_object, frac_param):
+        orbit_form, distance_map = None, None  # Initialize to None
+        
+        if frac_param["raster_image"]:
+            try:
+                #make sure the orbit path is suitable for the current OS
+                orbit_path = os.path.join(image_object.APP_DIR, "orbit", frac_param["raster_image"] + ".png")
+                orbit_form = np.array(
+                    PILIM.open(orbit_path,)
+                    .resize((800, 800))
+                    .convert("L"),
+                    dtype=float,
+                )
+                distance_map = distance_transform_edt(np.logical_not(orbit_form))
+                distance_map = np.divide(
+                    distance_map,
+                    abs(distance_map),
+                    out=np.zeros_like(distance_map),
+                    where=distance_map != 0,
+                )
+            except:
+                print("Raster image not found or other issue")
 
-    if "RFA" in frac_param["method"]:
+        return distance_map
+
+    def init_compute_method(frac_param):
+
         frac_obj = RFA_fractal(frac_param)
         compute_method = None  # Initialize to None
 
+
+        # RFA
         if "Nova" in frac_param["method"]: # c-mapping before chunking
             c=frac_obj.array #corresponding pixel to complex plane
             c=c.flatten()
@@ -262,11 +299,17 @@ def IMAGE_wrapper_for_fractal(param):
         elif "Halley" in frac_param["method"]:
             compute_method = frac_obj.Halley_method
 
+        # Julia
 
+        # Mandelbrot
+
+        return frac_obj, compute_method
+
+    def init_chunking(image_object, frac_obj):
         if image_object.verbose:
             print("Chunking...", end="\r")
 
-        chunk_size = frac_param["N"] // 10
+        chunk_size = frac_obj.size // 10
         chunk_dir = os.path.join(image_object.IM_DIR, "memmap")
 
         array_chunks, array_chunks_indices = chunk_to_memmap(
@@ -277,43 +320,42 @@ def IMAGE_wrapper_for_fractal(param):
 
         if image_object.verbose:
             print("Chunking...Done")
+        return chunk_size, chunk_dir, array_chunks, array_chunks_indices
+    
+    def do_shading(image_object, normal):
+        if image_object.shading["type"] == "blinn-phong":
+            image_object.shade=image_object.blinn_phong(normal,image_object.lights)
+        elif image_object.shading["type"] == "matplotlib":
+            image_object.shade=image_object.matplotlib_light_source(image_object.z,image_object.lights)
+        elif image_object.shading["type"] == "fossil":
+            image_object.shade=image_object.matplotlib_light_source(image_object.z*image_object.frac_boundary,image_object.lights)
+        elif image_object.return_type == "distance": # we'll return blinn phong by default
+            image_object.shade=image_object.blinn_phong(normal,image_object.lights)
+        image_object.normal = normal
+        return image_object
+
+    def RFA_Image_wrapper(param):
+
+        image_object, frac_param = init_image_object(param)
+
+        distance_map = init_orbit_trap_computing(image_object, frac_param)
+
+        frac_obj, compute_method = init_compute_method(frac_param)
+        
+        chunk_size, chunk_dir, array_chunks, array_chunks_indices = init_chunking(image_object, frac_obj)
 
         # Precompute directories
         array_dir = os.path.join(chunk_dir, "array")
         boundary_dir = os.path.join(chunk_dir, "boundary")
         normal_dir = os.path.join(chunk_dir, "normal")
 
-        for i, array_chunk in enumerate(array_chunks):
-            if image_object.verbose:
-                print(f"Computing chunk {i+1}/{len(array_chunks)}...", end="\r")
-
-            full_chunk_path = os.path.join(array_dir, array_chunk)
-            np_chunk = np.memmap(full_chunk_path, dtype=frac_obj.array.dtype, mode='r', shape=(chunk_size, chunk_size))
-
-            # Here we call the pre-determined compute_method
-            if compute_method is not None:
-                
-                z_chunk, conv, dist_chunk, normal_chunk = compute_method(
-                    np_chunk,
-                    lambda z: frac_obj.poly.poly(z, frac_obj.coefs),
-                    lambda z: frac_obj.poly.dpoly(z, frac_obj.coefs),
-                    lambda z: frac_obj.poly.d2poly(z, frac_obj.coefs),
-                    frac_param["tol"],
-                    frac_param["itermax"],
-                    frac_param["damping"],
-                    distance_map=distance_map,
-                    verbose=frac_param["verbose"],
-                )
-
-            # Save the chunks
-            save_memmap(array=z_chunk, filename=array_chunk, directory=array_dir, shape=np_chunk.shape, dtype=frac_obj.array.dtype)
-            save_memmap(array=conv, filename=array_chunk, directory=boundary_dir, shape=np_chunk.shape, dtype=conv.dtype)
-            save_memmap(array=normal_chunk, filename=array_chunk, directory=normal_dir, shape=np_chunk.shape, dtype=normal_chunk.dtype)
+        with ProcessPoolExecutor() as executor:
+            executor.map(process_chunk, [frac_obj]*len(array_chunks), [compute_method]*len(array_chunks), array_chunks, [array_dir]*len(array_chunks), [boundary_dir]*len(array_chunks), [normal_dir]*len(array_chunks), [chunk_size]*len(array_chunks), [distance_map]*len(array_chunks), [frac_param]*len(array_chunks))
 
         # Reassemble chunks
-        normal = reassemble_from_memmap(chunk_files=array_chunks, chunk_indices=array_chunks_indices, output_shape=frac_obj.array.shape, chunk_shape=np_chunk.shape, dtype=frac_obj.array.dtype, directory=normal_dir)
-        image_object.z = reassemble_from_memmap(chunk_files=array_chunks, chunk_indices=array_chunks_indices, output_shape=frac_obj.array.shape, chunk_shape=np_chunk.shape, dtype=frac_obj.array.dtype, directory=array_dir)
-        conv = reassemble_from_memmap(chunk_files=array_chunks, chunk_indices=array_chunks_indices, output_shape=frac_obj.array.shape, chunk_shape=np_chunk.shape, dtype=frac_obj.array.dtype, directory=boundary_dir)
+        normal = reassemble_from_memmap(chunk_files=array_chunks, chunk_indices=array_chunks_indices, output_shape=frac_obj.array.shape, chunk_shape=(chunk_size,chunk_size), dtype=frac_obj.array.dtype, directory=normal_dir)
+        image_object.z = reassemble_from_memmap(chunk_files=array_chunks, chunk_indices=array_chunks_indices, output_shape=frac_obj.array.shape, chunk_shape=(chunk_size,chunk_size), dtype=frac_obj.array.dtype, directory=array_dir)
+        conv = reassemble_from_memmap(chunk_files=array_chunks, chunk_indices=array_chunks_indices, output_shape=frac_obj.array.shape, chunk_shape=(chunk_size,chunk_size), dtype=frac_obj.array.dtype, directory=boundary_dir)
 
         image_object.z = image_object.z.real
         conv = conv.real
@@ -325,44 +367,161 @@ def IMAGE_wrapper_for_fractal(param):
         # Delete chunks
         empty_cache(chunk_dir)
 
-        # Julia fractal
-    elif "Julia" in frac_param["method"]:
-            pass
+        #Shading
+        image_object=do_shading(image_object, normal)
+
+        #Plot
+        if param["test"]:
+            Image_param = param["Image"]
+            # shader
+            image_object.Plot(image_object.shade,image_object.file_name+"_shader",Image_param["temp_dir"],print_create=param["verbose"])
+            # boundary
+            image_object.Plot(image_object.frac_boundary,image_object.file_name+"_nobckg",Image_param["temp_dir"],print_create=param["verbose"])
+            # iteration
+            image_object.Plot(image_object.z,image_object.file_name+"_iter",Image_param["temp_dir"],print_create=param["verbose"])
             
-        #Mandelbrot fractal
-    elif "Mandelbrot" in frac_param["method"]:
-            pass
 
-    #Shading
-    if image_object.shading["type"] == "blinn-phong":
-        image_object.shade=image_object.blinn_phong(normal,image_object.lights)
-    elif image_object.shading["type"] == "matplotlib":
-        image_object.shade=image_object.matplotlib_light_source(image_object.z,image_object.lights)
-    elif image_object.shading["type"] == "fossil":
-        image_object.shade=image_object.matplotlib_light_source(image_object.z*image_object.frac_boundary,image_object.lights)
-    elif image_object.return_type == "distance": # we'll return blinn phong by default
-        image_object.shade=image_object.blinn_phong(normal,image_object.lights)
-    image_object.normal = normal
-
-    #Plot
-    if param["test"]:
-        Image_param = param["Image"]
-        # shader
-        image_object.Plot(image_object.shade,image_object.file_name+"_shader",Image_param["temp_dir"],print_create=param["verbose"])
-        # boundary
-        image_object.Plot(image_object.frac_boundary,image_object.file_name+"_nobckg",Image_param["temp_dir"],print_create=param["verbose"])
-        # iteration
-        image_object.Plot(image_object.z,image_object.file_name+"_iter",Image_param["temp_dir"],print_create=param["verbose"])
+        if image_object.verbose:
+            print("Fractal_image...Done")
         
+        # Return
+        if image_object.return_type  == "iteration":
+            return image_object,image_object.z
+        elif image_object.return_type  == "distance":
+            return image_object,image_object.shade
+        elif image_object.return_type  == "boundary":
+            return image_object,image_object.frac_boundary
 
-    if image_object.verbose:
-        print("Fractal_image...Done")
-    
-    # Return
-    if image_object.return_type  == "iteration":
-        return image_object,image_object.z
-    elif image_object.return_type  == "distance":
-        return image_object,image_object.shade
-    elif image_object.return_type  == "boundary":
-        return image_object,image_object.frac_boundary
+    if "RFA" in param["Fractal"]["method"]:
+        return RFA_Image_wrapper(param)
+    elif "Julia" in param["Fractal"]["method"]:
+        pass
+    elif "Mandelbrot" in param["Fractal"]["method"]:
+        pass
 
+#test
+matplotlib_cmap = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
+                'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
+                'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn',
+                'spring', 'summer', 'autumn', 'winter', 'cool','Wistia',
+                'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy', 'RdBu', 'RdYlBu']
+
+seaborn_cmap = ['rocket', 'mako', 'flare', 'crest', 'icefire', 'vlag', 'mako',
+                'RdYlGn', 'Spectral']
+
+cmap_dict = matplotlib_cmap + seaborn_cmap
+
+raster_image_list=["circle","circle2","fire","human","eyes","planet","stars"]
+
+
+param={
+        #### General parameters
+        "clean_dir":False, #clean image dir before rendering
+        "verbose":True, #print stuff
+        "test":True, #for trying stuff and knowing where t====o put it
+
+        "end_dir": "images", #where to put final results
+        "file_name": f"test0", #name of temp files
+        
+        "media_form":"image", #image or video
+
+                ## Colour parameters
+                        #Colors
+        "cmap": "viridis", #test only
+        "palette_name":"viridis", #name from cmap_dict, or im_path for custom palette from image
+        "color_args":{"method": "matplotlib", #accents, matplotlib, seaborn
+                      "simple_palette":False,# if True, nb of colors is scaled down to range(1,10)
+                      "accent_method": "split_complementary", #can be combination of complementary, analogous, triadic, split_complementary, tetradicc, shades
+                        },
+
+        #### Video parameters
+        "Video":{"anim":"explosion", #pulsing, zoom, translation, flicker, explosion, shading, grain
+
+                # Frame parameters
+                "frame in memory": False, #if True, frame_list is updated as array, if False, frame_list is updated as list of paths
+                "fps":20 ,
+                "duration":10, #seconds
+                "nb_frames": None, #number of frames, if None, duration and fps are used
+                "verbose": True,
+
+                # Animation parameters
+                "explosion_": {"explosion_speed": 45, #log base
+                                "start_size": (1,1), #start size in pixels
+                                },
+                "pulsing_": {"beta":-0.004, #if None, -25/size
+                                "decal": 0,
+                                "oscillation_frequency":np.pi/50,
+                                "oscillation_amplitude": 10,
+                                "c": 3,
+                                
+                                },
+                "translation_": {"init_damp_r" : 0.4, 
+                                "end_damp_r" : 1.25, 
+                                "init_damp_c" : -0.5, 
+                                "end_damp_c" : 0.75},
+                "flicker_": {"flicker_percentage" : 0.005,
+                                "on_fractal" : True, 
+                                "dilation_size" : 2,
+                                "flicker_amplitude" : 2},
+                "grain_": {"border_thickness": 300,
+                                "hole_size": np.ones((3,3)),
+                                "distance_exponent_big": 1.2,
+                                "distance_exponent_small": 0.6,
+                                "nb_rotation":1,
+                                },
+                "zoom_": {"zoom_speed":1.02,
+                        },
+                },
+        #### Image parameters
+        #General
+        "Image":{"dpi":5000,
+                 "return type": "iteration", #iteration, distance, boundary
+
+                 "temp_dir": "images", #where to put temporary images, if test is True
+                 #Shading
+                 "shading": {"type": "blinn-phong", #None, matplotlib, blinn-phong, fossil
+                        "lights": (45., 0, 40., 0, 0.5, 1.2, 1),  # (azimuth, elevation, opacity, k_ambiant, k_diffuse, k_spectral, shininess) for blinn-phong (45., 0, 40., 0, 0.5, 1.2, 1)
+                                                                        # (azimuth, elevation, vert_exag, fraction) for matplotlib and fossil (315,20,1.5,1.2)
+                        "blend_mode": "hsv",
+                        "norm": None,     
+                        "nb_rotation": 0.5, #for Dynamic_shading anim
+                                },
+                "verbose": True,
+                },
+        
+        #### Fractal parameters
+        "Fractal":{"method": "RFA Newton", #RFA Newton, RFA Halley, 
+                "raster_image":"stars", # if None, raster image is np.zeros((size,size))
+
+                "size": 5000,
+                "domain":np.array([[-1,1],[-1,1]]),
+                "verbose":False,
+
+                ## RFA parameters
+                "random":True,
+
+                # Polynomial parameters (Must have value if random==False)
+                "degree": 5, #degree of the polynomial
+                "func": None,
+                "form": "root", #root, coefs, taylor_approx
+                "distance_calculation": 4, #see options of get_distance function in RFA_fractals.py
+
+                #Newton, Halley
+                "itermax":30,
+                "tol":1e-5,
+                "damping":complex(1.01,-.01),
+
+                ## Julia parameters
+
+                ## Mandelbrot parameters
+        },
+        
+        
+}
+
+if __name__ == "__main__":
+    import time
+    start = time.time()
+    img_test, z = IMAGE_wrapper_for_fractal(param)
+    end = time.time()
+    print(end - start)

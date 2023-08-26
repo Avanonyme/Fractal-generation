@@ -162,6 +162,7 @@ class RFA_fractal():
         self.__dict__.update(kwargs)
 
         self.array = self.init_array(config["N"],config["domain"])
+        self.size = config["N"]
         self.poly = Polynomials(func=config["func"],random_poly=config["random"],form=config["form"],**kwargs)
         self.coefs=self.poly.coefs        
         #check if poly converges ok with sample of domain
