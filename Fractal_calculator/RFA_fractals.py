@@ -3,6 +3,7 @@ import numpy as np
 import random as rd
 from scipy.ndimage import distance_transform_edt
 from skimage.filters import threshold_mean, butterworth
+from skimage.feature import canny
 import itertools as it
 
 class Polynomials():
@@ -164,7 +165,8 @@ class RFA_fractal():
         self.array = self.init_array(config["N"],config["domain"])
         self.size = config["N"]
         self.poly = Polynomials(func=config["func"],random_poly=config["random"],form=config["form"],**kwargs)
-        self.coefs=self.poly.coefs        
+        self.coefs=self.poly.coefs      
+        self.distance_option = config["distance_option"]  
         #check if poly converges ok with sample of domain
         if config["random"]==True:
             count=0
@@ -186,7 +188,8 @@ class RFA_fractal():
                                                 max_steps=50,
                                                 d2func= lambda z: self.poly.d2poly(z,self.coefs),
                                                 verbose=False)
-
+                # for boundary
+                self.convergence = u1.real
                 gen_area=z > threshold_mean(z)
 
                 if np.mean(gen_area)>up_treshold:
@@ -210,9 +213,6 @@ class RFA_fractal():
                 print("\n")
         if config["verbose"]:
             print("Initializing RFA fractal...Done")
-
-        # for boundary
-        self.convergence = u1.real
 
     def init_array(self,N,domain):
         """create array of complex numbers"""
@@ -252,6 +252,10 @@ class RFA_fractal():
 
         elif option==6:
             distance= butterworth(distance_map[i,j]*z) #lowpass filter
+
+        elif option==7:
+            distance = canny(distance_map[i,j]*z) #canny filter
+        
 
         return distance.flatten()
 

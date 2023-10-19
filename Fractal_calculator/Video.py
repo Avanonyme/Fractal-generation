@@ -6,20 +6,13 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
+import matplotlib.image as mpimg
 from PIL import Image as PILIM
 
 import cv2
 from scipy import ndimage
 
-from skimage.filters import threshold_mean
-from skimage.feature import canny
-from skimage.morphology import disk,dilation
-
-import time
-import imageio
-
 def clean_dir(folder, verbose=False):
-    import shutil
     if verbose:
         print("Cleaning directory '% s'..." %folder)
     for filename in os.listdir(folder):
@@ -35,16 +28,16 @@ def clean_dir(folder, verbose=False):
 
 class VIDEO():
     def __init__(self,param) -> None:
-        print("Init Videos class(V-Init) fractals...")
+        print("Init Videos class(V-Init) fractals...",end="\r")
 
-        from DaskOwnerFractalGenerator import IMAGE_wrapper_for_fractal
+        from daskowner import IMAGE_wrapper_for_fractal
         self.IMAGE_wrapper_for_fractal = IMAGE_wrapper_for_fractal
         ### Create folders
         self.APP_DIR = os.path.dirname(os.path.abspath(__file__))
         self.IM_DIR=os.path.join(self.APP_DIR,param["Image"]["temp_dir"])
         try: os.mkdir(self.IM_DIR)
         except: pass
-        self.VID_DIR=os.path.join(self.IM_DIR,"video")
+        self.VID_DIR=os.path.join(self.APP_DIR,os.path.dirname(param["Image"]["temp_dir"]),"video")
         try: os.mkdir(self.VID_DIR)
         except: pass
 
@@ -55,15 +48,15 @@ class VIDEO():
 
         ### Set paramaters
         self.set_video_parameters(param["Video"])
+        self.dpi=param["Image"]["dpi"]
         self.cmap = param["cmap"]
 
-        print("Done (V-Init)")
+        print("Init Videos class(V-Init) fractals...Done\t\t",end="\r")
 
     def set_video_parameters(self,param):
         self.fps=param["fps"]
         self.duration=param["duration"]
-        self.nb_frames = param["nb_frames"]
-
+        self.nb_frames = param["nb_frames"] if param["nb_frames"] is not None else self.fps * self.duration
 
         self.frac_boundary = []
 
@@ -71,6 +64,7 @@ class VIDEO():
 
         self.frame_save = param["frame in memory"]
 
+        self.fractal_background = param["fractal background"]
 
     ## ARRAY HANDLING
     def init_array(self,N,domain):
@@ -105,12 +99,16 @@ class VIDEO():
             for i,arr in enumerate(result):
                 if np.isnan(arr).any():
                     result[i] = np.zeros(arr.shape)
+                if np.isinf(arr).any():
+                    result[i] = np.ones(arr.shape)
 
         else:
             result = (img_obj - np.min(img_obj)) / (np.max(img_obj) - np.min(img_obj))
             #check for true_divide error
             if np.isnan(result).any(): #any because divide by 0 error says max = min
                 result = np.zeros(result.shape)
+            if np.isinf(result).any():
+                result = np.ones(result.shape)
         
         # reset divide by 0 error
         np.seterr(divide='warn', invalid='warn')
@@ -139,23 +137,65 @@ class VIDEO():
 
         return mask
     
-    def paste_image(self, path_background, path_foreground,img_alpha):
+        
+    def apply_colormap_to_grayscale_image(self,image_path,type_= "path"):
+        """
+        Open a grayscale image, apply a Matplotlib colormap, and save as an array in memory.
+
+        Parameters:
+            image_path (str): The path to the grayscale image to be opened.
+            cmap_name (str): The name of the Matplotlib colormap to be applied.
+
+        Returns:
+            colored_image (ndarray): An array representing the image with the colormap applied.
+        """
+
+        # Step 1: Read the grayscale image
+        if type_ == "path":
+            grayscale_image = mpimg.imread(image_path)
+        else:
+            grayscale_image = image_path.copy()
+
+        # Step 2: Make sure the image is grayscale
+        if len(grayscale_image.shape) == 3:
+            raise ValueError("The input image is not grayscale.")
+
+        # Step 3: Apply the colormap
+        cmap = plt.get_cmap(self.cmap)
+        colored_image = cmap(grayscale_image / np.max(grayscale_image))
+
+        # Step 4: Convert to uint8 [0, 255] scale (optional)
+        colored_image = (colored_image[:, :, :3] * 255).astype(np.uint8)
+
+        return colored_image
+    
+    def paste_image(self, path_background, path_foreground,img_alpha,img_bg_alpha=None):
         # Read the bckg image
         if isinstance(path_background, str):
-            bckg = PILIM.open(path_background).convert('RGBA')
+            bckg = np.asarray(PILIM.open(path_background).convert('RGBA'))
         else:
-            bckg = PILIM.fromarray(path_background.astype(np.uint8)).convert('RGBA')
+            bckg = np.asarray(PILIM.fromarray(path_background.astype(np.uint8)).convert('RGBA')).copy()
+
+        if img_bg_alpha is not None:
+            bckg[:,:,3] = img_bg_alpha
+        bckg = PILIM.fromarray(bckg.astype(np.uint8))
+
 
         # Read the frgrd image
         if isinstance(path_foreground, str):
             frgrd = PILIM.open(path_foreground).convert('RGBA')
         else:
             frgrd = np.asarray(PILIM.fromarray(path_foreground.astype(np.uint8)).convert('RGBA')).copy()
+
+             #Make sure bckg is bigger than frgrd or equal
+            if np.asarray(bckg)[:,:,0].size < frgrd[:,:,0].size:
+                #if not, put black bcakground around bckg
+                bckg = PILIM.fromarray(self.paste_image(np.zeros_like(frgrd),np.asarray(bckg),np.ones_like(np.asarray(bckg)[:,:,0])*255,img_bg_alpha=np.zeros_like(frgrd[:,:,0])))
             # put alpha values
-            frgrd[:,:,3] = img_alpha
+            frgrd[:,:,3] = img_alpha 
 
             frgrd = PILIM.fromarray(frgrd)
-        
+
 
         # Determine the position to center the frgrd image on the bckg image
         x_offset = (bckg.width - frgrd.width) // 2
@@ -166,21 +206,124 @@ class VIDEO():
 
         return np.array(bckg)
     ### ANIMATIONS ###
-    def Explosion(self,img_obj,im_path_2=None, **kwargs):
+    def Alpha(self,img_obj,im_path_2=None, render_type = "iteration",**kwargs):
+        """
+        Gradual reveal of the image on top of an image
+        
+        """
+
+        if self.verbose:
+            print("Alpha anim...",end="\r")
+
+        # get the size of the image
+        if isinstance(img_obj,list):
+            if isinstance(img_obj[0],str): #img_obj is list of path
+                width,height = np.asarray(PILIM.open(img_obj[0]).convert("L")).shape[0],np.asarray(PILIM.open(img_obj[0]).convert("L")).shape[1]
+
+            else:#list of arrays
+                width,height=img_obj[0].shape[0],img_obj[0].shape[1]
+                
+        else: # single image
+            if isinstance(img_obj,str): #img_obj is path
+                width,height = np.asarray(PILIM.open(img_obj).convert("L")).shape[0],np.asarray(PILIM.open(img_obj).convert("L")).shape[1]
+
+            else: #img_obj is array
+                width,height=img_obj.shape[0],img_obj.shape[1]
+
+        if im_path_2 is None:
+            #black background
+            im_bg = np.zeros((img_obj.shape[0],img_obj.shape[1],3)) if not isinstance(img_obj,list) else np.zeros((width,height,3))
+        
+        else:
+            #image background
+            im_bg = np.asarray(PILIM.open(im_path_2).resize((width,height))) if not isinstance(img_obj,list) else np.asarray(PILIM.open(im_path_2).resize((width,height)))
+        # get the parameters
+
+        # set alpha channel
+        img_alpha= np.zeros((width,height))
+
+        # loop over the images
+        frame_list = []
+
+        for i in range(self.nb_frames):
+            if self.verbose:
+                print("Alpha anim...",i,"/",self.nb_frames, end="\r")
+
+            if isinstance(img_obj,list):    
+
+                img = self.apply_colormap_to_grayscale_image(img_obj[i]) if isinstance(img_obj[0],str) else self.apply_colormap_to_grayscale_image(img_obj[i])
+
+                boundary = self.frac_boundary[i] if not isinstance(img_obj[0],str) else self.frac_boundary
+            else:
+                img = self.apply_colormap_to_grayscale_image(img_obj, type_ = "array")   
+                boundary = self.frac_boundary
+            #for the first seconds, only alpha on fractal augments if render type is iteration
+            if render_type == "distance":
+                # alpha increase is homogeneous
+                if i < (self.nb_frames//12):
+                    img_alpha = img_alpha + 1/(self.nb_frames//12) *255
+                #for the last seconds, decrease alpha rapidly
+                elif i > self.nb_frames - self.nb_frames//36:
+                    img_alpha = img_alpha - 1/(self.nb_frames//18) *255
+                else: #pass 
+                    img_alpha = np.ones((width,height)) * 255
+            else: #render type is iteration
+                if i < self.nb_frames//12:
+                    img_alpha = np.where(boundary == 0, 0, 255 * i/(self.nb_frames//12))
+                #for the last seconds, decrease alpha rapidly
+                elif i > self.nb_frames - self.nb_frames//24:
+                    img_alpha = np.where(boundary == 0, 255-(255*i/self.nb_frames//24), 255 - 255 * (i - (self.nb_frames - self.nb_frames//24))/(self.nb_frames//24))
+                else:
+                    img_alpha = np.ones((width,height)) * 255
+            
+            img_alpha[boundary == 1] = np.clip(img_alpha[boundary == 1],60,210)
+            img_alpha[boundary==0] = np.clip(img_alpha[boundary==0],100,230)
+                
+            
+            if self.fractal_background:
+                #save and open fractal image
+                plt.imsave(self.FRAME_DIR + f"frame_{i}.png",img.astype(np.uint8), cmap = self.cmap, vmin=0,vmax=255) #image must be in RGB or RGBA format
+                im = np.asarray(PILIM.open(self.FRAME_DIR + f"frame_{i}.png").resize((width,height)))[:,:,:3]
+                
+
+                new_im = self.paste_image(im,im_bg,im_bg[:,:,-1], img_bg_alpha = img_alpha) #im_bg should have alpha channel
+
+            else:
+                #save and open fractal image
+                plt.imsave(self.FRAME_DIR + f"frame_{i}.png",img.astype(np.uint8), cmap = self.cmap, vmin=0,vmax=255) #image must be in RGB or RGBA format
+                im = np.asarray(PILIM.open(self.FRAME_DIR + f"frame_{i}.png").resize((width,height)))
+
+                #paste image
+                new_im = self.paste_image(im_bg,im,img_alpha)
+            if self.frame_save:
+                frame_list.append(new_im.astype(np.uint8)) # list of arrays (n,n,4)
+            else:
+                plt.imsave(self.FRAME_DIR + f"frame_{i}.png",new_im.astype(np.uint8), cmap = self.cmap, vmin=0,vmax=255) #image must be in RGBA format
+
+                frame_list.append(self.FRAME_DIR + f"frame_{i}.png") #list of paths
+        
+        if self.verbose:
+            print("Alpha anim...",self.nb_frames,"/",self.nb_frames,"Done\t\t")
+
+        return frame_list
+
+    def Explosion(self,img_obj,alpha_mask,im_path_2=None, **kwargs):
         '''Generate explosion animation of input image
         img_obj: image or images to be animated
         im_path_2: put explosion on top of this image, if None, explosion is on top of black background
         '''
+
+        if self.verbose:
+            print("Explosion anim...",end="\r")
         # get the parameters
         log_base = kwargs.get('explosion_speed', 45)
         inf_size = kwargs.get('start_size', (1,1))
         resample = kwargs.get('resample_method', 3)
         nb_frames = len(img_obj)
-
         # get the size of the image
         if isinstance(img_obj,list):
             if isinstance(img_obj[0],str): #self.frame_save is true and img_obj is list of path
-                sup_size = np.asarray(PILIM.open(img_obj[0])).shape[:2]
+                sup_size = np.asarray(PILIM.open(img_obj[0]).convert("L")).shape
             else: #self.frame_save is false and img_obj is list of arrays
                 sup_size=(img_obj[0].shape[0],img_obj[0].shape[1])
         else: #img_obj is array
@@ -193,6 +336,7 @@ class VIDEO():
         temp_list = list(np.ones((nb_frames - 2*len(list_ex) -20)) * sup_size[0]) # 20 because we want animation to start before end of explosion
         temp_list+=list(np.flip(list_ex))
         list_ex +=temp_list
+
         # get the background image
         if im_path_2 is None:
             #black background
@@ -201,12 +345,27 @@ class VIDEO():
             #image background
             im_bg = np.asarray(PILIM.open(im_path_2).resize(sup_size))
         
+        #sprite handling
+        def make_png_list_from_folder(folder):
+            png_list = []
+            for file in sorted(os.listdir(folder)):
+                if file.endswith(".png"):
+                    png_list.append(os.path.join(folder, file))
+            return png_list
+        sprite_list = make_png_list_from_folder(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),"NFT_cache/sprites/Merged"))
+        # match sprite list lenght to list_ex length
+        #if len(sprite_list) > len(list_ex):
+        #    sprite_list = sprite_list[:len(list_ex)]
+        #elif len(sprite_list) < len(list_ex):
+        #    sprite_list += sprite_list[-(len(list_ex)-len(sprite_list)):]
+        
         # loop over the images, resize, and add it on top of the background
         frame_list = []
         # while explosion, frame is similar to previous frame and resizing
         for i,size in enumerate(list_ex):
+            size = int(size)
             if self.verbose:
-                print("explosion anim: ",i,"/",len(list_ex), end="\r")
+                print("Explosion anim...",i,"/",len(list_ex), end="\r")
             
 
             if isinstance(img_obj,list) and size == sup_size[0] or not (i<explosion_size-10 or i>explosion_size+10): #middle frames
@@ -214,34 +373,56 @@ class VIDEO():
             elif isinstance(img_obj,list) and size != sup_size[0] and (i<explosion_size-10 or i>explosion_size+10): #start and end frames
                 #check if size is smaller than previous size
                 if size < list_ex[i-1]: #size is smaller than previous size, we're in the shrinking phase (end)
-                    img = img_obj[i-1]
+                    img = img_obj[i-1] if not isinstance(img_obj[0],str) else img_obj[i]
                 else: #size is bigger than previous size, we're in the explosion phase (beginning)
-                    img = img_obj[i+1]
+                    img = img_obj[i+1] if not isinstance(img_obj[0],str) else img_obj[i]
             else: #single image
                 img = img_obj
 
-            if not isinstance(img_obj[0],str): #img_obj is list of arrays or single array
-                img_alpha = np.where(img ==0,0,255)
-                img_alpha = np.asarray(PILIM.fromarray(img_alpha.astype(np.uint8)).resize((size,size),resample=resample)) if size != sup_size[0] else img_alpha
-            
-                plt.imsave(self.FRAME_DIR + f"frame_{i}.png",img, cmap = self.cmap, vmin=0,vmax=255) #image must be in RGB or RGBA format
-                im = np.asarray(PILIM.open(self.FRAME_DIR + f"frame_{i}.png").resize((size,size),resample=resample)) if size != sup_size[0] else np.asarray(PILIM.open(self.FRAME_DIR + f"frame_{i}.png"))
-            else: #img_obj is list of paths
+            if self.fractal_background:
                 im = PILIM.open(img).resize((size,size),resample=resample) if size != sup_size[0] else PILIM.open(img)
-                im_gray = np.asarray(im.convert("L"))
-                img_alpha = np.where(im_gray <= 30,0,255)
-                im = np.asarray(im)
-                
+                im = self.apply_colormap_to_grayscale_image(np.asarray(im), type_ = "array")
 
-            new_im = self.paste_image(im_bg,im,img_alpha)
-
-            if self.frame_save:
-                frame_list.append(new_im) # list of arrays (n,n,3)
-            else:
-                plt.imsave(self.FRAME_DIR + f"frame_{i}.png",new_im, cmap = self.cmap, vmin=0,vmax=255) #image must be in RGB or RGBA format
-                frame_list.append(self.FRAME_DIR + f"frame_{i}_explosion.png") #list of pathd
+                im_bg_sprite = PILIM.open(sprite_list[i]).resize((size,size),resample=resample) if i > explosion_size else PILIM.open(sprite_list[i]).resize(sup_size,resample=resample)
+                im_bg_sprite = np.asarray(im_bg_sprite)
+                im_bg_sprite = self.past_image(im_bg_sprite,im,im_bg[:,:,-1], img_bg_alpha = np.ones_like(im_bg[:,:,-1])*255) #im_bg should have alpha channel
+                new_im = self.paste_image(im_bg_sprite,im_bg,im_bg[:,:,-1], img_bg_alpha = np.ones_like(im_bg[:,:,-1])*255) #im_bg should have alpha channel
             
+            else:
+                if not isinstance(img_obj[0],str): #img_obj is list of arrays 
+                    img_alpha = np.asarray(PILIM.fromarray(alpha_mask[i].astype(np.uint8)).resize((size,size),resample=resample)) if size != sup_size[0] else alpha_mask[i]
+                    #normalize to 255
+                    img_alpha = np.clip(self.normalize(img_alpha) * 255,0,230)
+                
+                    plt.imsave(self.FRAME_DIR + f"frame_{i}.png",img, cmap = self.cmap, vmin=0,vmax=255, dpi =self.dpi) #image must be in RGB or RGBA format
+                    im = np.asarray(PILIM.open(self.FRAME_DIR + f"frame_{i}.png").resize((size,size),resample=resample)) if size != sup_size[0] else np.asarray(PILIM.open(self.FRAME_DIR + f"frame_{i}.png"))
+                    im = self.apply_colormap_to_grayscale_image(im, type_ = "array")
+                else: #img_obj is list of paths
+                    im = PILIM.open(img).resize((size,size),resample=resample) if size != sup_size[0] else PILIM.open(img)
+                    img_alpha = np.asarray(PILIM.fromarray(alpha_mask[i].astype(np.uint8)).resize((size,size),resample=resample)) if size != sup_size[0] else alpha_mask[i]
+                    #normalize to 255
+                    img_alpha = np.clip(self.normalize(img_alpha) * 255,0,230)
+                    im = self.apply_colormap_to_grayscale_image(np.asarray(im), type_ = "array")
+                    
+                im_bg_sprite = PILIM.open(sprite_list[i]).resize((size,size),resample=resample) if i > explosion_size else PILIM.open(sprite_list[i]).resize((sup_size[0],sup_size[1]),resample=resample)
+                im_bg_sprite = np.asarray(im_bg_sprite)
+                im_bg_sprite = self.paste_image(im_bg,im_bg_sprite,im_bg_sprite[:,:,-1])
+
+                new_im = self.paste_image(im_bg_sprite,im,img_alpha)            
+            if self.frame_save:
+                frame_list.append(new_im) # list of arrays (n,n,4)
+            else:
+                plt.imsave(self.FRAME_DIR + f"frame_{i}.png",new_im, cmap = self.cmap, vmin=0,vmax=255) #image must be in RGBA format
+                frame_list.append(self.FRAME_DIR + f"frame_{i}.png") #list of path
+
+        # add im_bg frame to end of list
+        if self.frame_save:
+            frame_list + ([im_bg]*self.fps*4) #save im_bg as array for 2 seconds
+        else:
+            frame_list + ([im_path_2]*self.fps*4) #save im_bg as path for 2 seconds
         # while not explosion, we just save the frame
+        if self.verbose:
+            print("Explosion anim...",len(list_ex),"/",len(list_ex),"Done\t\t")
         return frame_list
     
     def Grain(self,img, **kwargs):
@@ -255,10 +436,10 @@ class VIDEO():
         return: a numpy array of shape (height, width, 3)
         """
         if self.verbose:
-            print("grain anim...",end="")
+            print("Grain anim...",end="\r")
         # get the parameters
         border_thickness = kwargs.get('border_thickness', 200)
-        hole_size = kwargs.get('hole_size', np.ones((1,1)))
+        hole_size = np.ones(kwargs.get('hole_size', (1,1)))
         n_frames = kwargs.get('nb_frames', self.fps * self.duration)
         distance_exponent_big = kwargs.get('distance_exponent', 0.3)
         distance_exponent_small = kwargs.get('distance_exponent', 0.3)
@@ -315,15 +496,15 @@ class VIDEO():
         border_thickness_small=border_thickness//2
         small_gfilter[border_thickness_small:-border_thickness_small,border_thickness_small:-border_thickness_small]=0
 
-        gfilter=do_grain(mask_border,fill_value=0.05,distance_exponent=distance_exponent_big)
-        small_gfilter=do_grain(small_gfilter,fill_value= 0.05,distance_exponent=distance_exponent_small)
+        gfilter=do_grain(mask_border,fill_value=0.01,distance_exponent=distance_exponent_big)
+        small_gfilter=do_grain(small_gfilter,fill_value= 0.1,distance_exponent=distance_exponent_small)
 
         small_gfilter=small_gfilter.astype(bool)
         # Apply the granular gfilter on the distance transform
         gfilter = np.logical_not(gfilter).astype(np.float64)
         
         frame_list=[]
-        
+        mask_list=[]
         #Animate rotation of grain
         new_gfilter=np.zeros((width,height))
 
@@ -333,22 +514,24 @@ class VIDEO():
 
             for n,image in enumerate(img):
                 i = angles[n]
-                print("rotation grain anim: ",int(i),"/", 360 * nb_rotation, end="\r")
+                print("Grain anim...",int(i),"/", 360 * nb_rotation, end="\r")
+                if isinstance(image,str): #img is list of path
+                    image = np.asarray(PILIM.open(image).convert("L"))
                 gfilter_rotated=ndimage.rotate(gfilter,i,reshape=False,cval=0,prefilter=False,mode="constant")
-                new_gfilter+=gfilter_rotated-0.3*new_gfilter
+                new_gfilter+=gfilter_rotated-0.1*new_gfilter
 
-                new_gfilter+=grain_fill(new_gfilter,fill_value=0.0).astype(np.float64)
+                new_gfilter+=grain_fill(new_gfilter,fill_value=0.1).astype(np.float64)
                 #new_gfilter %= 10
 
                 new_gfilter = np.clip(new_gfilter,0,1.2)
 
                 new_img=image  * new_gfilter
 
-
+                mask_list.append(new_gfilter.copy())
                 if self.frame_save:
                     frame_list.append((self.normalize(new_img) * 255).astype(np.uint8))
                 else:
-                    plt.imsave(self.FRAME_DIR + f"frame_{n}.png",(self.normalize(new_img) * 255).astype(np.uint8), cmap = self.cmap, vmin=0,vmax=255)
+                    cv2.imwrite(self.FRAME_DIR + f"frame_{n}.png",(self.normalize(new_img) * 255).astype(np.uint8))
                     frame_list.append(self.FRAME_DIR + f"frame_{n}.png")
 
 
@@ -357,25 +540,27 @@ class VIDEO():
             for n,i in enumerate(angles):
                 
                 if self.verbose:
-                    print("rotation grain anim: ",int(i),"/", 360 * nb_rotation, end="\r")
+                    print("Grain anim...",int(i),"/", 360 * nb_rotation, end="\r")
                 gfilter_rotated=ndimage.rotate(gfilter,i,reshape=False,cval=0,prefilter=False,mode="constant")
-                new_gfilter+=gfilter_rotated-0.3*new_gfilter
+                new_gfilter+=gfilter_rotated-0.1*new_gfilter
+                
 
                 new_gfilter+=grain_fill(new_gfilter,fill_value=0.0).astype(np.float64)
-                #new_gfilter %= 10
-
+                
+                
                 new_gfilter = np.clip(new_gfilter,0,1.2)
 
                 new_img=img * new_gfilter
 
+                mask_list.append(new_gfilter.copy())
                 if self.frame_save:
                     frame_list.append((self.normalize(new_img) * 255).astype(np.uint8))
                 else:
-                    plt.imsave(self.FRAME_DIR + f"frame_{n}.png",(self.normalize(new_img) * 255).astype(np.uint8), cmap = self.cmap, vmin=0,vmax=255)
+                    cv2.imwrite(self.FRAME_DIR + f"frame_{n}.png",(self.normalize(new_img) * 255).astype(np.uint8))
                     frame_list.append(self.FRAME_DIR + f"frame_{n}.png")
         if self.verbose:
-            print('grain anim done')
-        return frame_list #int 0-255 list of array (n,n)
+            print('Grain anim...Done\t\t')
+        return frame_list,mask_list #int 0-255 list of array (n,n)
     
     def Flicker(self,img_obj,**kwargs):
         """
@@ -447,7 +632,7 @@ class VIDEO():
                     mask[i]*=fractal_mask
 
             else:
-                fractal_mask=self.frac_boundary
+                fractal_mask=self.frac_boundary[0]
                 fractal_mask = np.where(fractal_mask>0.5,1,0).astype(bool)
 
                 mask*=fractal_mask
@@ -458,6 +643,8 @@ class VIDEO():
         if isinstance(img_obj,list): #multiple images
             
             for i,img_array in enumerate(img_obj):
+                if self.verbose:
+                    print("Flicker animation...",i,"/",len(img_obj), end="\r")
                 
                 if isinstance(img_array,str): #img_obj is list of path
                     img_array = np.asarray(PILIM.open(img_array).convert("L"))
@@ -483,7 +670,7 @@ class VIDEO():
                 if self.frame_save:
                     frame_list.append(img_array)
                 else:
-                    plt.imsave(self.FRAME_DIR + f"frame_{i}.png",img_array, cmap = "gray", vmin=0,vmax=255)
+                    cv2.imwrite(self.FRAME_DIR + f"frame_{i}.png",img_array)
                     frame_list.append(self.FRAME_DIR + f"frame_{i}.png")
 
                
@@ -493,6 +680,8 @@ class VIDEO():
             # Specify the number of frames you want in the animation
             num_frames = nb_frames
             for i in range(num_frames+1):
+                if self.verbose:
+                    print("Flicker animation...",i,"/",num_frames, end="\r")
                 
                 img_array = img_obj.copy()
 
@@ -506,7 +695,7 @@ class VIDEO():
                 flicker_multiplier = 1 + (flicker_amplitude * sine_values_masked)
 
                 # Apply on image
-                img_array *= flicker_multiplier
+                img_array = img_array * flicker_multiplier
 
                 # Normalize the image
                 img_array = (self.normalize(img_array) * 255).astype(np.uint8)
@@ -515,11 +704,11 @@ class VIDEO():
                 if self.frame_save:
                     frame_list.append(img_array)
                 else:
-                    plt.imsave(self.FRAME_DIR + f"frame_{i}.png",img_array, cmap = "gray", vmin=0,vmax=255)
+                    cv2.imwrite(self.FRAME_DIR + f"frame_{i}.png",img_array)
                     frame_list.append(self.FRAME_DIR + f"frame_{i}.png")
 
         if self.verbose:
-            print("flicker anim done")
+            print("Flicker animation...Done\t\t\t")
 
         return frame_list #int 0 - 255 list of arrays(n,n)
 
@@ -539,7 +728,7 @@ class VIDEO():
         beta = kwargs.get("beta",-0.3)
         decal = kwargs.get("decal",0)
         omega = kwargs.get("oscillation_frequency",np.pi)
-        amplitude = kwargs.get("amplitude",1)
+        amplitude = kwargs.get("oscillation_amplitude",1)
         c = kwargs.get("c",None)
 
         if self.verbose:
@@ -550,7 +739,7 @@ class VIDEO():
         
         if isinstance(img_obj,list):
             if isinstance(img_obj[0],str): #list of path
-                img = np.asarray(PILIM.open(img_obj[0]).convert("L"))
+                img = np.asarray(PILIM.open(img_obj[0]).convert("L"),dtype=np.float64)
 
                 frac_size = img.shape[0]
             else:
@@ -593,6 +782,13 @@ class VIDEO():
         
         for step,t in enumerate(np.arange(0, max_t, 1)):
 
+            if isinstance(img_obj,list):
+                if isinstance(img_obj[step],str): #list of path
+                    img = np.asarray(PILIM.open(img_obj[step]).convert("L"),dtype=np.float64)
+
+                else:
+                    img = img_obj[step]
+
             Mask = np.where(R<= c*t,1,0 ) # where c*t is peak of a Gaussian wave
             Psi = f(R - c * t,beta=beta)
 
@@ -602,7 +798,11 @@ class VIDEO():
                 except: #fractal bounds is a list containing one array
                     wave_im = (((Psi * Mask) * fractal_bounds[0] * 255)).astype(np.uint8)
 
-                img = (img_obj[step] * 255/np.max(img_obj[step]))
+                if isinstance(img_obj[step],str):
+                    img = (img * 255/np.max(img)) # image always appears
+
+                else:
+                    img = (img_obj[step] * 255/np.max(img_obj[step]))
                 
                 #new_im = (self.normalize(wave_im + img_obj[step]) * 255).astype(np.uint8)
 
@@ -616,13 +816,13 @@ class VIDEO():
             if self.frame_save:
                 frame_list.append((wave_im + img).astype(np.uint8))
             else:
-                plt.imsave(self.FRAME_DIR + f"frame_{step}.png",(wave_im + img).astype(np.uint8), cmap = "gray", vmin=0,vmax=255)
+                cv2.imwrite(self.FRAME_DIR + f"frame_{step}.png",(wave_im + img).astype(np.uint8))
                 frame_list.append(self.FRAME_DIR + f"frame_{step}.png")
             
             if self.verbose:
                 print("  ",step,"/",max_t,np.max(Psi) ,end="\r")
         if self.verbose:
-            print("Pulsing done")
+            print("Pulsing...Done\t\t\t")
         return frame_list #int 0 - 255 list of arrays(n,n)
 
     def Zoom_and_Translate(self,param, animation = "zoom translate shading", **kwargs):
@@ -641,7 +841,7 @@ class VIDEO():
         
         """
         if self.verbose:
-            print("(Vm-Zoom_and_Translate)...")
+            print("(Vm-Zoom_and_Translate)...",end=" ")
             if 'zoom' in animation:
                 print("Zooming...",end=" ")
             if "translate" in animation:
@@ -649,13 +849,12 @@ class VIDEO():
             if "shading" in animation:
                 print("Shading...",end=" ")
         # get the parameters
-        image_param = param["Image"]
-        fractal_param = param["Fractal"]
-
         init_damp_r = kwargs.get("init_damp_r",0.4)
         end_damp_r = kwargs.get("end_damp_r",1.35)
         init_damp_c = kwargs.get("init_damp_c",-0.5)
         end_damp_c = kwargs.get("end_damp_c",0.85)
+
+        actual_dpi = param["Image"]["dpi"]
 
         zoom_speed_factor = kwargs.get("zoom_speed",1.1)
 
@@ -671,80 +870,154 @@ class VIDEO():
         # get damping list from the parameters
         if "translate" in animation:
             damping_list=np.linspace(init_damp_r,end_damp_r,self.fps*self.duration+1)+np.linspace(init_damp_c,end_damp_c,self.fps*self.duration+1)*1j
-            fractal_param["damping"]=damping_list[0]
+            param["Fractal"]["damping"]=damping_list[0]
 
         if "shading" in animation:
             nb_rotation = kwargs.get("nb_rotation",1)
             azimuth = np.linspace(0,22.5 * nb_rotation, nb_frames)
 
+
         def check_coord(z,edges,dpi,coord,zoom,prev_point):
-            #init old coord
+            #init cartesian coord
             array=self.init_array(dpi,coord)
 
-            for i in range(1,int(z.size),1):
-                mask=self.circle_mask(z,dpi,i)
-                points=np.where(edges==mask,mask,np.zeros_like(mask))
-                if np.any(points)==True:
-                    candidate=np.where(points==True)
-                    point=[candidate[0][0],candidate[1][0]]
-                    break
-            try:
-                pts=array[point[0],point[1]]
-            except:
-                return coord*zoom,prev_point
-            pts=[pts.real,pts.imag]
+            #init distance map to the center
+            dist_map = np.ones_like(z)
+            dist_map[z.shape[0]//2,z.shape[1]//2] = 0
+            dist_map = ndimage.distance_transform_edt(dist_map)
 
+            #set distance map on edge only, other values are set to inf
+            dist_map = np.where(edges>0,dist_map,np.nan)
+            #plot
+            #get the point with the min distance to the center
+            point = np.unravel_index(np.nanargmin(dist_map), dist_map.shape)
+
+            if np.any(point) == False:
+                return coord*zoom,prev_point
+
+            #get the point value in z
+            pts = array[point[0],point[1]]
+            pts = [pts.real,pts.imag]
+
+            #update coord
             coord=np.array([[(pts[0])-1*zoom,(pts[0])+1*zoom], #real
                         [(pts[1])-1*zoom,(pts[1])+1*zoom]]) #complex
+            
             return coord,point
-        
+
         #loop over frames
         zoom_speed = 1
+        zoom_speed_for_border = 1
+        param["Fractal"]["form"]=None
+        param["Fractal"]["pts"] = [0,0]
         for _ in range(nb_frames):
         # num_frames is self.fps*self.duration
-
-            print("Zoom and Translate and Shading",_,end="\r")
+            print("\t\t\t\t\t\t",end="\r")
+            print("Zoom and Translate and Shading",_,"\t",end="\r")
             #Create frame
-            Imobj, im = self.IMAGE_wrapper_for_fractal(param)
-            # update parameters
-            #_==0
-            if _ == 0:
-                fractal_param["form"]=None
-                fractal_param["random"]=False #True only for first frame at most
-                fractal_param["pts"] = [0,0]
 
-                fractal_param["verbose"] = False
+            #zoom logic
+            if _  == 0 :
+                if "zoom" in animation and "translate" not in animation:
+                    param["Image"]["dpi"] = 500
+                    param["Fractal"]["size"] = 500
+                Imobj, im = self.IMAGE_wrapper_for_fractal(param)
+                
+                if "zoom" in animation and "translate" not in animation:
+                    Imobj.frac_boundary = np.asarray(PILIM.fromarray(Imobj.frac_boundary.astype(np.uint8)).resize((500,500),resample=PILIM.BICUBIC).convert("L"))
+                    Imobj.frac_boundary = np.where(Imobj.frac_boundary>0.5,1,0).astype(bool)
 
-            fractal_param["func"]= Imobj.func
-            
-            if "zoom" in animation:
+                param["Fractal"]["func"]= Imobj.func
+                param["func"] = Imobj.func
+                param["Fractal"]["random"]=False #True only for first frame at most
+                param["random"] = False
+                param["Fractal"]["verbose"]=False
+                param["Image"]["verbose"]=False
+                param["verbose"] = False
+
+            else:
                 zoom_speed = zoom_speed/zoom_speed_factor
-                fractal_param["domain"],fractal_param["pts"]=check_coord(im,Imobj.frac_boundary,image_param["dpi"],fractal_param["domain"],zoom_speed,prev_point=param["pts"])
-            if "translate" in animation:
-                fractal_param["damping"]=damping_list[_]
-
+                zoom_speed_for_border = zoom_speed_for_border/zoom_speed_factor
             
+            if ("zoom" in animation) and ("translate" not in animation) and (_ % self.fps == 0): # create bigger image, that we can use to zoom in without recalculation each frames
+
+                param["Image"]["dpi"] = 5000
+                param["Fractal"]["size"] = 5000
+                if _ == 0:
+                    param["Fractal"]["domain"],param["Fractal"]["pts"]=check_coord(im,Imobj.frac_boundary,500 if _ ==0 else 5000,param["Fractal"]["domain"],zoom_speed,prev_point=param["Fractal"]["pts"])
+
+                    Imobj, big_im = self.IMAGE_wrapper_for_fractal(param)
+                    big_im = big_im.copy().astype(np.uint8)
+
+                else:
+                    Imobj, big_im = self.IMAGE_wrapper_for_fractal(param)
+                    big_im = big_im.copy().astype(np.uint8)
+                    boundary_temp = np.asarray(PILIM.fromarray(Imobj.frac_boundary.astype(np.uint8)).resize((5000,5000),resample=PILIM.BICUBIC).convert("L"))
+                    param["Fractal"]["domain"],param["Fractal"]["pts"]=check_coord(big_im,boundary_temp,500 if _ ==0 else 5000,param["Fractal"]["domain"],zoom_speed,prev_point=param["Fractal"]["pts"])
+
+                #resize big_im
+                im = np.asarray(PILIM.fromarray(big_im).resize((actual_dpi,actual_dpi),resample=PILIM.BICUBIC))
+                param["Image"]["dpi"] = 2000
+                param["Fractal"]["size"] = 2000
+
+                #augment tolerance after 60 frames
+                if  _ > 60:
+                    param["Fractal"]["tol"]  = param["Fractal"]["tol"] * 0.1
+
+                zoom_speed_for_border = 1
+            
+            elif "zoom" in animation and "translate" not in animation:
+                #zoom in on the image (cut the borders)
+                        # Calculate cropping borders
+                x1 = int(5000 * (1 - zoom_speed_for_border) / 2)
+                y1 = int(5000 * (1 - zoom_speed_for_border) / 2)
+                x2 = int(5000 * (1 + zoom_speed_for_border) / 2)
+                y2 = int(5000 * (1 + zoom_speed_for_border) / 2)
+                im = big_im[y1:y2,x1:x2]
+                im = np.asarray(PILIM.fromarray(im.astype(np.uint8)).resize((actual_dpi,actual_dpi),resample=PILIM.BICUBIC))
+
+            elif "zoom" in animation and "translate" in animation:
+                
+                param["Fractal"]["domain"],param["Fractal"]["pts"]=check_coord(im,Imobj.frac_boundary,param["Image"]["dpi"],param["Fractal"]["domain"],zoom_speed,prev_point=param["Fractal"]["pts"])
+                Imobj, im = self.IMAGE_wrapper_for_fractal(param)
+                im = im.copy().astype(np.uint8)
+
+                #augment tolerance after 60 frames
+                if  _ > 60:
+                    param["Fractal"]["tol"]  = param["Fractal"]["tol"] * 0.01
+                
+            #translate logic
+            if "translate" in animation:
+                if "zoom" not in animation:
+                    Imobj, im = self.IMAGE_wrapper_for_fractal(param)
+                param["Fractal"]["damping"]=damping_list[_]
+
             #save frames
             if "zoom" in animation or "translate" in animation:
-                self.frac_boundary.append(Imobj.frac_boundary)
+                self.frac_boundary.append(cv2.resize(Imobj.frac_boundary.astype(np.uint8),(actual_dpi,actual_dpi),interpolation=cv2.INTER_NEAREST))
 
             if "shading" in animation:
                 shade_im = self.Dynamic_shading(Imobj,azimuth = [azimuth[_]] ,**kwargs)[0]
 
+                if "zoom" in animation or "translate" in animation:
+                    pass
+                else:
+                    self.frac_boundary = cv2.resize(Imobj.frac_boundary.astype(np.uint8),(actual_dpi,actual_dpi),interpolation=cv2.INTER_NEAREST)
+
                 if self.frame_save:
                     frame_list.append((self.normalize(shade_im) * 255).astype(np.uint8))
                 else:
-                    plt.imsave(self.FRAME_DIR + f"frame_{_}.png",(self.normalize(shade_im) * 255).astype(np.uint8), cmap = "gray", vmin=0,vmax=255)
+                    cv2.imwrite(self.FRAME_DIR + f"frame_{_}.png",(self.normalize(shade_im) * 255).astype(np.uint8))
                     frame_list.append(self.FRAME_DIR + f"frame_{_}.png")
-            else:
+            else: #no shading
                 if self.frame_save:
                     frame_list.append((self.normalize(im) * 255).astype(np.uint8))
                 else:
-                    plt.imsave(self.FRAME_DIR + f"frame_{_}.png",(self.normalize(im) * 255).astype(np.uint8), cmap = "gray", vmin=0,vmax=255)
+                    cv2.imwrite(self.FRAME_DIR + f"frame_{_}.png",(self.normalize(im) * 255).astype(np.uint8))
                     frame_list.append(self.FRAME_DIR + f"frame_{_}.png")
 
         if self.verbose:
-            print("Done (Vm Zoom_and_Translate)")
+            print("Zoom and Translate and Shading...Done\t\t\t")
 
         return frame_list #int 0 - 255 list of arrays(n,n)
     
@@ -764,7 +1037,7 @@ class VIDEO():
         """
 
         if self.verbose:
-            print("(Vm-Dynamic_shading)...")
+            print("(Vm-Dynamic_shading)...",end="\r")
         # get the parameters
         light = kwargs.get("light",(45., 0, 40., 0, 0.5, 1.2, 1))
         shader_type = kwargs.get("type","blinn-phong")
@@ -806,10 +1079,11 @@ class VIDEO():
             if self.frame_save or len(azimuth_list) == 1: # if only one frame, return array
                 frame_list.append((self.normalize(shade) * 255).astype(np.uint8))
             else:
-                plt.imsave(self.FRAME_DIR + f"frame_{azimuth}.png",(self.normalize(shade) * 255).astype(np.uint8), cmap = "gray", vmin=0,vmax=255)
+                cv2.imwrite(self.FRAME_DIR + f"frame_{azimuth}.png",(self.normalize(shade) * 255).astype(np.uint8))
                 frame_list.append(self.FRAME_DIR + f"frame_{azimuth}.png")
 
         if self.verbose:
-            print("Done (Vm Dynamic_shading)")
+            print("(Vm-Dynamic_shading)...Done",end="\r")
+
         return frame_list
 

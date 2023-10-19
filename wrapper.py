@@ -1,27 +1,124 @@
-"""
-The purpose of this file is to load the parameters from a json file
-and to run the fractal generator using the parameters using the dask distributed scheduler
-
-"""
-
 import os
-import sys
-import json
-import dask.distributed as dd
 from concurrent.futures import ProcessPoolExecutor
 
-
 import numpy as np
-from scipy.ndimage import sobel, distance_transform_edt, binary_dilation
+from scipy.ndimage import sobel, distance_transform_edt
 from skimage.feature import canny
 import PIL.Image as PILIM
 import imageio
+import cv2
 
-from Video import VIDEO
-from Image import IMAGE, COLOUR
-from RFA_fractals import RFA_fractal
+from Fractal_calculator.Fractal_calculator.Video import VIDEO
+from Fractal_calculator.Fractal_calculator.Image import IMAGE, COLOUR
+from Fractal_calculator.Fractal_calculator.RFA_fractals import RFA_fractal
 
-#used for debugging, and if you want to run the fractal generator on a computer with low memory
+def clean_dir(folder, verbose=False):
+    if verbose:
+        print("Cleaning directory '% s'..." %folder)
+    for filename in os.listdir(folder):
+        file_path = os.path.join(folder, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                clean_dir(file_path)
+        except Exception as e:
+            print('Failed to delete %s. Reason: %s' % (file_path, e))
+
+def paste_image(path_background, path_foreground,img_alpha,img_bg_alpha=None):
+    # Read the bckg image
+    if isinstance(path_background, str):
+        bckg = np.asarray(PILIM.open(path_background).convert('RGBA'))
+    else:
+        bckg = np.asarray(PILIM.fromarray(path_background.astype(np.uint8)).convert('RGBA')).copy()
+
+    if img_bg_alpha is not None:
+        bckg[:,:,3] = img_bg_alpha
+    bckg = PILIM.fromarray(bckg.astype(np.uint8))
+
+
+    # Read the frgrd image
+    if isinstance(path_foreground, str):
+        frgrd = PILIM.open(path_foreground).convert('RGBA')
+    else:
+        frgrd = np.asarray(PILIM.fromarray(path_foreground.astype(np.uint8)).convert('RGBA')).copy()
+
+            #Make sure bckg is bigger than frgrd or equal
+        if np.asarray(bckg)[:,:,0].size < frgrd[:,:,0].size:
+            #if not, put black bcakground around bckg
+            bckg = PILIM.fromarray(paste_image(np.zeros_like(frgrd),np.asarray(bckg),np.ones_like(np.asarray(bckg)[:,:,0])*255,img_bg_alpha=np.zeros_like(frgrd[:,:,0])))
+        # put alpha values
+        frgrd[:,:,3] = img_alpha 
+
+        frgrd = PILIM.fromarray(frgrd)
+
+
+    # Determine the position to center the frgrd image on the bckg image
+    x_offset = (bckg.width - frgrd.width) // 2
+    y_offset = (bckg.height - frgrd.height) // 2
+
+    # Paste the frgrd image onto the bckg image using the alpha channel as a mask
+    bckg.paste(frgrd, (x_offset, y_offset), frgrd)
+
+    return np.array(bckg)
+
+def create_merged_frames(explosion, vortex, total_frames,verbose=False):
+    def duplicate_filepaths(filepaths):
+        duplicated_filepaths = []  # Initialize an empty list to store the duplicated filepaths
+        for filepath in filepaths:
+            # Append the original filepath and its duplicate to the new list
+            duplicated_filepaths.extend([filepath, filepath])
+        return duplicated_filepaths
+    def merge_frames(frames_gif1, frames_gif2, merge_start, total_frames, save_path="merged_frames",verbose=False):
+        
+        if verbose:
+            print("Merging frames...",end="\r")
+            print("Merging frames...duplicating",end="\r")
+        #frames_gif1 = duplicate_filepaths(frames_gif1)
+        print("Merging frames...duplicating done",end="\r")
+        frames=[]
+        for frame in frames_gif1[:merge_start]:
+            #open and append frame to list as array
+            frames.append(np.asarray(PILIM.open(frame).convert('RGBA')))
+
+        for i,frame in enumerate(frames_gif1[merge_start:]):
+
+            frames.append(paste_image(frames_gif2[i//4],frame,np.ones_like(np.asarray(PILIM.open(frame).convert('RGBA'))[:,:,0])*255))
+        def add_last_frames(total_frames):
+            new_frames =[]
+            for frame in frames_gif2[i//4:]:
+                #we will append the rest of the frames from gif2 in a loop until total_frames
+                new_frames.append(np.asarray(PILIM.open(frame).convert('RGBA')))
+            return new_frames
+        while len(frames) < total_frames:
+            print(f"Merging frames...{len(frames)}",end="\r")
+            frames+=add_last_frames(total_frames)
+        if verbose:
+            print("Merging frames...done",end="\r")
+        #save frames in new folder
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+        for i,frame in enumerate(frames[:total_frames]):
+            PILIM.fromarray(frame.astype(np.uint8)).save(save_path + f"/frame_{i:0{5}d}.png")
+        
+        return frames[:total_frames]
+            
+
+        
+    def make_png_list_from_folder(folder):
+        png_list = []
+        for file in sorted(os.listdir(folder)):
+            if file.endswith(".png"):
+                png_list.append(os.path.join(folder, file))
+        return png_list
+
+    frames_gif1 = make_png_list_from_folder(os.path.join(os.path.dirname(os.path.dirname(__file__)),f"NFT_cache/sprites/Explosion/Frames/{explosion}"))
+    frames_gif2 = make_png_list_from_folder(os.path.join(os.path.dirname(os.path.dirname(__file__)),f"NFT_cache/sprites/Vortex/Frames/{vortex}"))
+    merge_start = len(frames_gif1) // 2
+    save_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),"NFT_cache/sprites/Merged")
+
+    merge_frames(frames_gif1, frames_gif2, merge_start, total_frames, save_path,verbose=verbose)
+
 def empty_cache(cache_dir):
     for sdir in os.listdir(cache_dir):
         for file in os.listdir(os.path.join(cache_dir, sdir)):
@@ -29,30 +126,6 @@ def empty_cache(cache_dir):
         os.rmdir(os.path.join(cache_dir, sdir))
     for file in os.listdir(cache_dir):
         os.remove(os.path.join(cache_dir, file))
-
-def load_params(param_path):
-    with open(param_path, 'r') as f:
-        param = json.load(f)
-    return param
-
-def process_json(json):
-    """
-    call the corresponding functions to process the json file
-    """
-
-    #cmap
-    json["cmap"] = COLOUR_wrapper(json["palette_name"], json["color_args"])
-
-    if json["media_form"] == "image":
-        img_obj,z = IMAGE_wrapper_for_fractal(json)
-        
-        img_obj.paste_image(json["drawing_path"],z) # TO CHANGE
-
-        img_obj.save_image(json["end_dir"], json["file_name"], json["verbose"])
-
-    elif json["media_form"] == "video":
-        video_obj = VIDEO_wrapper_for_fractal(json)
-        video_obj.save_video(json["end_dir"], json["file_name"], json["verbose"])
 
 def chunk_to_memmap(arr, chunk_size, directory="memmap_chunks"):
     
@@ -72,7 +145,7 @@ def chunk_to_memmap(arr, chunk_size, directory="memmap_chunks"):
 
     # Split array into chunks
     row_chunks = np.array_split(arr, num_chunks, axis=0)
-    
+    dir_list = directory.split(",")
     for i, row_chunk in enumerate(row_chunks):
         col_chunks = np.array_split(row_chunk, num_chunks, axis=1)
         for j, chunk in enumerate(col_chunks):
@@ -113,6 +186,7 @@ def save_memmap(array, filename, directory = None, shape = (1,1), dtype = np.flo
     mmapped_array = np.memmap(filename, dtype=dtype, mode='w+', shape=shape)
     mmapped_array[:] = array[:]
     mmapped_array.flush()
+
 def process_chunk(frac_obj, compute_method, array_chunk, array_dir, boundary_dir, normal_dir, chunk_size, distance_map, frac_param):
         print(f"Computing chunk {array_chunk}...", end="\r")
         full_chunk_path = os.path.join(array_dir, array_chunk)
@@ -143,44 +217,47 @@ def VIDEO_wrapper_for_fractal(param, im_path_2=None,img_obj = None ,**kwargs):
     video_object = VIDEO(param)
     
     if video_object.verbose:
-        print("Video maker (V-vm)...",end="")
+        print("Video wrapper...",end="")
     
     video_param = param["Video"]
     image_param = param["Image"]
-    anim = video_param["anim"]
-    print("ANIMATION",anim)
+    anim = video_param["animation"]
 
+
+    print("with anim: ",anim, end="\r")
     ## inputs: 
     if ("zoom" in anim )or ("translate" in anim) or ("shading" in anim):
-        frame_list = video_object.Zoom_and_Translate(image_param, animation = anim, **video_param["zoom_"], **video_param["translation_"])
+        frame_list = video_object.Zoom_and_Translate(param, animation = anim, **video_param["zoom_"], **video_param["translate_"])
 
     else:
         if img_obj is None: # if no image is given, generate one
             img_obj,frame_list = IMAGE_wrapper_for_fractal(param)
             frame_list = (video_object.normalize(frame_list)*255).astype(np.uint8)
-            video_object.frac_boundary = [img_obj.frac_boundary]
+            video_object.frac_boundary = [img_obj.frac_boundary] * video_object.nb_frames
         else: # IMAGE object is given, use generated image
-            frame_list = (video_object.normalize(img_obj.z)*255).astype(np.uint8)    
-            video_object.frac_boundary = [img_obj.frac_boundary]
+            if param["Image"]["return type"] == "iteration":
+                frame_list = (video_object.normalize(img_obj.z)*255).astype(np.uint8)    
+            elif param["Image"]["return type"] == "distance":
+                frame_list = (video_object.normalize(img_obj.shade)*255).astype(np.uint8)
+            video_object.frac_boundary = [img_obj.frac_boundary] * video_object.nb_frames
     ## outputs: frame_list
 
     ## inputs: image or frame_list
     if "pulsing" in anim:
-        frame_list = video_object.Pulsing(frame_list,video_object.frac_boundary, **video_param["pulsing_"])
-    if "flicker" in anim:
+        frame_list = video_object.Pulsing(frame_list,video_object.frac_boundary, **video_param["pulsing_"])        
+    if "flicker" in anim and not "distance" in anim:
         frame_list = video_object.Flicker(frame_list,**video_param["flicker_"])
-    
     # add explosion and grain (either this or zoom in image)
     if "explosion" in anim:
-        frame_list = video_object.Grain(frame_list, **video_param["grain_"])
-        frame_list = video_object.Explosion(frame_list, im_path_2, **video_param["explosion_"])
-    ## outputs: frame_list
-
-    # zoom in image, replace explosion and grain
-    # NOT IMPLEMENTED
-   #if "zoom_in" in anim:
-   #     frame_list = video_object.Zoom_in(frame_list, **["zoom_in_"])
-
+        # merge explosion and vortex
+        create_merged_frames(param["Image"]["Explosion_image"],param["Image"]["Vortex_image"],video_object.nb_frames,verbose=param["Video"]["verbose"])
+        frame_list,alpha_mask = video_object.Grain(frame_list, **video_param["grain_"])
+        frame_list = video_object.Explosion(frame_list,alpha_mask, im_path_2, **video_param["explosion_"])
+    else: # alpha blending animation
+        video_param["flicker_"]["on_fractal"]=False
+        frame_list = video_object.Flicker(frame_list,**video_param["flicker_"])
+        frame_list = video_object.Alpha(frame_list, im_path_2, render_type=image_param["return type"])
+    ## outputs: frame_list with bckg image 
     if video_object.verbose:
         print("Done (V-vm)")
     if param["test"]:
@@ -195,7 +272,11 @@ def VIDEO_wrapper_for_fractal(param, im_path_2=None,img_obj = None ,**kwargs):
                     
                     # Append the image frame to the GIF
                     writer.append_data(image)
-    return frame_list
+
+    #add 2 second of only image at the end
+    #frame_list = np.append(frame_list, np.array([frame_list[0]]*video_object.fps*5), axis=0)
+
+    return video_object,frame_list
 
 def COLOUR_wrapper(palette_name,method = "accents",**kwargs):
     """
@@ -209,35 +290,55 @@ def COLOUR_wrapper(palette_name,method = "accents",**kwargs):
     """
     accent_method = kwargs.pop('accent_method', "complementary")
     simple_cmap = kwargs.pop('simple_palette', False)
+    cmap_name  = kwargs.pop('cmap_name', "my_cmap")
+    add_black = kwargs.pop('add_black', False)
+    
 
     c_obj = COLOUR()
-    
     if method == "seaborn":
-        palette = c_obj.get_seaborn_cmap(palette_name)
+        palette = c_obj.get_seaborn_cmap(palette_name,add_black=add_black)
     elif method == "matplotlib":
-        palette = c_obj.get_matplotlib_cmap(palette_name)
+        palette = c_obj.get_matplotlib_cmap(palette_name,add_black=add_black)
     elif method == "accents":
-        #open image
-        img = np.asarray(PILIM.open(palette_name))
 
-        #create cmap
-        palette = c_obj.create_palette_from_image(img)
+        try:
+            #open image
+            img = np.asarray(PILIM.open(palette_name))
 
-        palette = c_obj.create_accents_palette(palette,accent_method=accent_method)
+            #create cmap
+            palette = c_obj.create_palette_from_image(img)
 
-        palette = c_obj.create_perceptually_uniform_palette(palette, steps = 256-len(palette) if len(palette)<256 else 2)
-        palette = c_obj.create_uniform_colormap(palette)
+            palette = c_obj.create_accents_palette(palette,accent_method=accent_method)
+
+            palette = c_obj.create_perceptually_uniform_palette(palette, steps = 256-len(palette) if len(palette)<256 else 2)
+            palette = c_obj.create_uniform_colormap(palette)
+        except:
+            print("accent palette creator has issue. Using random seaborn cmap instead")
+
+            matplotlib_cmap = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
+                'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
+                'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn',
+                'spring', 'summer', 'autumn', 'winter', 'cool','Wistia',
+                'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy', 'RdBu', 'RdYlBu']
+
+            seaborn_cmap = ['rocket', 'mako', 'flare', 'crest', 'icefire', 'vlag', 'mako',
+                'RdYlGn', 'Spectral']
+            
+            cmap_choose_from = matplotlib_cmap + seaborn_cmap
+            palette = c_obj.get_seaborn_cmap(np.random.choice(cmap_choose_from),add_black=add_black)
+
 
     if simple_cmap:
         palette=c_obj.create_palette_from_image(np.asarray(c_obj.render_color_palette(palette, "palettes")))
     else:
         pass
 
-    cmap_name=c_obj.cmap_from_list(palette)
+    cmap_name=c_obj.cmap_from_list(palette,cmap_name = cmap_name,add_black=False)
 
     return cmap_name
 
 def IMAGE_wrapper_for_fractal(param):
+
     def init_image_object(param):
         image_object = IMAGE(param)
 
@@ -254,7 +355,16 @@ def IMAGE_wrapper_for_fractal(param):
         if frac_param["raster_image"]:
             try:
                 #make sure the orbit path is suitable for the current OS
-                orbit_path = os.path.join(image_object.APP_DIR, "orbit", frac_param["raster_image"] + ".png")
+                orbit_path = os.path.join(image_object.APP_DIR, frac_param["raster_image_dir"], frac_param["raster_image"])
+                try:
+                    orbit_form = np.array(
+                        PILIM.open(orbit_path,)
+                        .resize((2000, 2000))
+                        .convert("L"),
+                        dtype=float,
+                    )
+                except:
+                    print("the error arises from pil")
                 orbit_form = np.array(
                     PILIM.open(orbit_path,)
                     .resize((800, 800))
@@ -269,7 +379,7 @@ def IMAGE_wrapper_for_fractal(param):
                     where=distance_map != 0,
                 )
             except:
-                print("Raster image not found or other issue")
+                print("Raster image not found or other issue", os.path.join(image_object.APP_DIR, frac_param["raster_image_dir"], frac_param["raster_image"]))
 
         return distance_map
 
@@ -315,11 +425,21 @@ def IMAGE_wrapper_for_fractal(param):
         array_chunks, array_chunks_indices = chunk_to_memmap(
             frac_obj.array, chunk_size, directory=os.path.join(chunk_dir, "array")
         )
+        chunk_to_memmap(
+            np.zeros_like(frac_obj.array),
+            chunk_size,
+            directory=os.path.join(chunk_dir, "boundary"),
+        )
+        chunk_to_memmap(
+            np.zeros_like(frac_obj.array),
+            chunk_size,
+            directory=os.path.join(chunk_dir, "normal"),
+        )
 
         array_chunks = [os.path.basename(chunk) for chunk in array_chunks]
 
         if image_object.verbose:
-            print("Chunking...Done")
+            print("Chunking...Done", end="\r")
         return chunk_size, chunk_dir, array_chunks, array_chunks_indices
     
     def do_shading(image_object, normal):
@@ -329,7 +449,7 @@ def IMAGE_wrapper_for_fractal(param):
             image_object.shade=image_object.matplotlib_light_source(image_object.z,image_object.lights)
         elif image_object.shading["type"] == "fossil":
             image_object.shade=image_object.matplotlib_light_source(image_object.z*image_object.frac_boundary,image_object.lights)
-        elif image_object.return_type == "distance": # we'll return blinn phong by default
+        else: # we'll return blinn phong by default
             image_object.shade=image_object.blinn_phong(normal,image_object.lights)
         image_object.normal = normal
         return image_object
@@ -343,6 +463,12 @@ def IMAGE_wrapper_for_fractal(param):
         frac_obj, compute_method = init_compute_method(frac_param)
         
         chunk_size, chunk_dir, array_chunks, array_chunks_indices = init_chunking(image_object, frac_obj)
+
+        param["func"] = frac_obj.coefs
+        param["form"] = "coefs"
+        frac_param["func"] = frac_obj.coefs
+        frac_param["form"] = "coefs"
+        image_object.func = frac_obj.coefs
 
         # Precompute directories
         array_dir = os.path.join(chunk_dir, "array")
@@ -368,7 +494,7 @@ def IMAGE_wrapper_for_fractal(param):
         empty_cache(chunk_dir)
 
         #Shading
-        image_object=do_shading(image_object, normal)
+        do_shading(image_object, normal)
 
         #Plot
         if param["test"]:
@@ -382,7 +508,7 @@ def IMAGE_wrapper_for_fractal(param):
             
 
         if image_object.verbose:
-            print("Fractal_image...Done")
+            print("Fractal_image...Done", end="\r")
         
         # Return
         if image_object.return_type  == "iteration":
@@ -399,129 +525,3 @@ def IMAGE_wrapper_for_fractal(param):
     elif "Mandelbrot" in param["Fractal"]["method"]:
         pass
 
-#test
-matplotlib_cmap = ['viridis', 'plasma', 'inferno', 'magma', 'cividis',
-                'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
-                'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn',
-                'spring', 'summer', 'autumn', 'winter', 'cool','Wistia',
-                'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy', 'RdBu', 'RdYlBu']
-
-seaborn_cmap = ['rocket', 'mako', 'flare', 'crest', 'icefire', 'vlag', 'mako',
-                'RdYlGn', 'Spectral']
-
-cmap_dict = matplotlib_cmap + seaborn_cmap
-
-raster_image_list=["circle","circle2","fire","human","eyes","planet","stars"]
-
-
-param={
-        #### General parameters
-        "clean_dir":False, #clean image dir before rendering
-        "verbose":True, #print stuff
-        "test":True, #for trying stuff and knowing where t====o put it
-
-        "end_dir": "images", #where to put final results
-        "file_name": f"test0", #name of temp files
-        
-        "media_form":"image", #image or video
-
-                ## Colour parameters
-                        #Colors
-        "cmap": "viridis", #test only
-        "palette_name":"viridis", #name from cmap_dict, or im_path for custom palette from image
-        "color_args":{"method": "matplotlib", #accents, matplotlib, seaborn
-                      "simple_palette":False,# if True, nb of colors is scaled down to range(1,10)
-                      "accent_method": "split_complementary", #can be combination of complementary, analogous, triadic, split_complementary, tetradicc, shades
-                        },
-
-        #### Video parameters
-        "Video":{"anim":"explosion", #pulsing, zoom, translation, flicker, explosion, shading, grain
-
-                # Frame parameters
-                "frame in memory": False, #if True, frame_list is updated as array, if False, frame_list is updated as list of paths
-                "fps":20 ,
-                "duration":10, #seconds
-                "nb_frames": None, #number of frames, if None, duration and fps are used
-                "verbose": True,
-
-                # Animation parameters
-                "explosion_": {"explosion_speed": 45, #log base
-                                "start_size": (1,1), #start size in pixels
-                                },
-                "pulsing_": {"beta":-0.004, #if None, -25/size
-                                "decal": 0,
-                                "oscillation_frequency":np.pi/50,
-                                "oscillation_amplitude": 10,
-                                "c": 3,
-                                
-                                },
-                "translation_": {"init_damp_r" : 0.4, 
-                                "end_damp_r" : 1.25, 
-                                "init_damp_c" : -0.5, 
-                                "end_damp_c" : 0.75},
-                "flicker_": {"flicker_percentage" : 0.005,
-                                "on_fractal" : True, 
-                                "dilation_size" : 2,
-                                "flicker_amplitude" : 2},
-                "grain_": {"border_thickness": 300,
-                                "hole_size": np.ones((3,3)),
-                                "distance_exponent_big": 1.2,
-                                "distance_exponent_small": 0.6,
-                                "nb_rotation":1,
-                                },
-                "zoom_": {"zoom_speed":1.02,
-                        },
-                },
-        #### Image parameters
-        #General
-        "Image":{"dpi":5000,
-                 "return type": "iteration", #iteration, distance, boundary
-
-                 "temp_dir": "images", #where to put temporary images, if test is True
-                 #Shading
-                 "shading": {"type": "blinn-phong", #None, matplotlib, blinn-phong, fossil
-                        "lights": (45., 0, 40., 0, 0.5, 1.2, 1),  # (azimuth, elevation, opacity, k_ambiant, k_diffuse, k_spectral, shininess) for blinn-phong (45., 0, 40., 0, 0.5, 1.2, 1)
-                                                                        # (azimuth, elevation, vert_exag, fraction) for matplotlib and fossil (315,20,1.5,1.2)
-                        "blend_mode": "hsv",
-                        "norm": None,     
-                        "nb_rotation": 0.5, #for Dynamic_shading anim
-                                },
-                "verbose": True,
-                },
-        
-        #### Fractal parameters
-        "Fractal":{"method": "RFA Newton", #RFA Newton, RFA Halley, 
-                "raster_image":"stars", # if None, raster image is np.zeros((size,size))
-
-                "size": 5000,
-                "domain":np.array([[-1,1],[-1,1]]),
-                "verbose":False,
-
-                ## RFA parameters
-                "random":True,
-
-                # Polynomial parameters (Must have value if random==False)
-                "degree": 5, #degree of the polynomial
-                "func": None,
-                "form": "root", #root, coefs, taylor_approx
-                "distance_calculation": 4, #see options of get_distance function in RFA_fractals.py
-
-                #Newton, Halley
-                "itermax":30,
-                "tol":1e-5,
-                "damping":complex(1.01,-.01),
-
-                ## Julia parameters
-
-                ## Mandelbrot parameters
-        },
-        
-        
-}
-
-if __name__ == "__main__":
-    import time
-    start = time.time()
-    img_test, z = IMAGE_wrapper_for_fractal(param)
-    end = time.time()
-    print(end - start)

@@ -2,17 +2,15 @@ import os
 import sys
 
 import numpy as np
-import math
 
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-from PIL import Image as PILIM, ImageDraw
+from PIL import Image as PILIM
 
-from scipy.ndimage import gaussian_filter,sobel,binary_dilation
+from scipy.ndimage import gaussian_filter
 from skimage.filters import threshold_local
-from skimage.feature import canny
 
 import matplotlib.colors as mcolors
 import extcolors as extc
@@ -21,11 +19,9 @@ from scipy.spatial import cKDTree
 import colorsys
 import seaborn as sns
 
-from RFA_fractals import RFA_fractal
 
 ### GLOBAL FONCTIONS ###
 def clean_dir(folder,verbose=False):
-    import shutil
     if verbose:
         print("Cleaning directory '% s'..." %folder)
     for filename in os.listdir(folder):
@@ -67,7 +63,7 @@ class IMAGE():
         else:
             self.cmap = param["cmap"]
         if param["verbose"]:
-            print("Init Image class...Done")
+            print("Init Image class...Done",end="\r")
     
     def set_image_parameters(self,param):
         self.param=param
@@ -92,6 +88,7 @@ class IMAGE():
 
         frac_param["random"]=param["random"]
         frac_param["func"]=param["func"]
+        self.func = param["func"]
         frac_param["form"]=param["form"]
         frac_param["degree"]=param["degree"]
 
@@ -103,6 +100,9 @@ class IMAGE():
         frac_param["verbose"]=param["verbose"]
 
         frac_param["raster_image"]=param["raster_image"]
+        frac_param["raster_image_dir"] = param["raster_image_dir"]
+
+        frac_param["distance_option"]=param["distance_option"]
 
         return frac_param
     
@@ -121,9 +121,9 @@ class IMAGE():
         fig.savefig(Dir+"/"+name,dpi=self.dpi) 
         if print_create==True:
             print("created figure '% s'" %name,end="")
-            print("in folder '% s'" %Dir)
+            print("in folder '% s'" %Dir,end="\r")
         plt.close(fig)
-        return None
+        return name
     
     ############RENDERING#################
     ### COLORS ###
@@ -170,7 +170,7 @@ p
             matplotlib.colors.LightSource: light source
         """
         blend_mode = kwargs.pop('blend_mode', 'soft')
-        norm = kwargs.pop('norm', mcolors.PowerNorm(0.3))
+        norm = mcolors.PowerNorm(kwargs.pop('norm', 0.3))
 
         lightS = mcolors.LightSource(azdeg=light[0], altdeg=light[1], **kwargs)
 
@@ -355,6 +355,28 @@ class COLOUR():
         g = int((1 - t) * color1[1] + t * color2[1])
         b = int((1 - t) * color1[2] + t * color2[2])
         return (r, g, b)
+    
+    def extend_colormap(self,cmap, new_colors):
+        """Extend a given colormap with new colors at the end.
+        
+        Parameters:
+            cmap: Original colormap
+            new_colors: New colors to be appended at the end (can be a list)
+            
+        Returns:
+            new_cmap: New colormap with colors appended at the end
+        """
+        
+        # Extract original colormap colors
+        colors = [cmap(i) for i in np.linspace(0, 1, 256)]
+        
+        # Add new colors
+        colors.extend(new_colors)
+        
+        # Create new colormap
+        new_cmap = mcolors.LinearSegmentedColormap.from_list("extended_cmap", colors)
+        
+        return new_cmap
 
     def complementary_color(self,color):
         """
@@ -689,7 +711,7 @@ class COLOUR():
 
         return palette
  
-    def get_seaborn_cmap(self,palette_or_colors):
+    def get_seaborn_cmap(self,palette_or_colors, add_black=True):
 
         if isinstance(palette_or_colors, str):
             # If a string (palette name) is provided, directly use it to get the Seaborn colormap
@@ -705,9 +727,13 @@ class COLOUR():
             # Create a colormap using Seaborn with the provided hex colors
             cmap = sns.color_palette(hex_colors).as_hex()
 
+        if add_black:
+            #add last color black as hex
+            cmap.insert(0,"#000000")
+            
         return cmap
     
-    def get_matplotlib_cmap(self,palette_or_colors):
+    def get_matplotlib_cmap(self,palette_or_colors, add_black=True):
         if isinstance(palette_or_colors, str):
             # If a string (palette name) is provided, use it to get the Matplotlib colormap
             cmap = plt.get_cmap(palette_or_colors)
@@ -715,11 +741,15 @@ class COLOUR():
         else:
             # If a list of colors is provided, convert them to hex if needed
             hex_colors = [mcolors.to_hex(color) if isinstance(color, tuple) else color for color in palette_or_colors]
+        
+        if add_black:
+            #add last color black as hex
+            hex_colors.insert(0,"#000000")
 
         return hex_colors
     
     ### RENDER ###
-    def cmap_from_list(self,color_list, cmap_name="my_cmap"):
+    def cmap_from_list(self,color_list, cmap_name="my_cmap", add_black=True):
         """ Create a matplotlib colormap objectfrom a list of colors
 
         Args:
@@ -733,6 +763,12 @@ class COLOUR():
             color_list = [(r/255, g/255, b/255) for r, g, b in color_list]
         else: #rgb or rgba
             pass
+
+        if add_black:
+            #add color black to beginning of colormap
+            color_list.insert(0,(0,0,0))     
+        
+          
         cmap=mcolors.LinearSegmentedColormap.from_list(cmap_name,color_list,N=256)
         cm.register_cmap(name=cmap_name, cmap=cmap)
 
