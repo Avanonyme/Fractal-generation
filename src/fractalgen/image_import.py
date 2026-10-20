@@ -219,7 +219,9 @@ def config_from_image(
     name = stem or source.stem
 
     target = Path(output) if output is not None else config.resolve_output()
-    directory = target.parent if target is not None else Path.cwd()
+    # With no output path configured, keep generated assets out of the working
+    # directory: they belong next to a render, or in ./out.
+    directory = target.parent if target is not None else Path.cwd() / "out"
     raster_path, _ = write_assets(analysis, directory, stem=name)
 
     fractal = config.fractal
