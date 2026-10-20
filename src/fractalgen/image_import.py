@@ -35,7 +35,17 @@ from ._numeric import as_float, as_int
 from .colour import rgb_to_hex
 from .config import ColourConfig, Config, ConfigError, MapConfig, OrbitTrapConfig
 
-__all__ = ["ImageAnalysis", "analyse_image", "write_assets", "config_from_image", "otsu_threshold"]
+#: Source formats the CLI scans a folder for.
+IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"})
+
+__all__ = [
+    "IMAGE_SUFFIXES",
+    "ImageAnalysis",
+    "analyse_image",
+    "write_assets",
+    "config_from_image",
+    "otsu_threshold",
+]
 
 
 @dataclass(frozen=True)

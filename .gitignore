@@ -7,3 +7,7 @@ out/
 images/
 *.gif
 *.mp4
+
+# drop source photos here; the folder is kept, the contents are not
+photos/*
+!photos/.gitkeep

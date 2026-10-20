@@ -164,3 +164,39 @@ def test_cli_from_image_end_to_end(tmp_path: Path):
 
     assert main(["from-image", str(source), "-o", str(tmp_path / "x.png"), "--raster-only"]) == 0
     assert not (tmp_path / "x.png").exists()
+
+
+def test_cli_processes_a_whole_folder(tmp_path: Path):
+    from fractalgen.cli import main
+
+    folder = tmp_path / "photos"
+    folder.mkdir()
+    _photo(folder / "one.png")
+    _photo(folder / "two.png")
+    (folder / "notes.txt").write_text("ignored")
+
+    output_dir = tmp_path / "renders"
+    output_dir.mkdir()
+    assert main(["from-image", str(folder), "-o", str(output_dir), "--colours", "3", "--raster-size", "32"]) == 0
+
+    assert (output_dir / "one.png").exists()
+    assert (output_dir / "two.png").exists()
+    assert (output_dir / "one_raster.png").exists()
+    assert (output_dir / "two_palette.json").exists()
+    assert not (output_dir / "notes.png").exists()
+
+
+def test_cli_reports_an_empty_folder(tmp_path: Path, capsys):
+    from fractalgen.cli import main
+
+    empty = tmp_path / "photos"
+    empty.mkdir()
+    assert main(["from-image", str(empty)]) == 2
+    assert "no images found" in capsys.readouterr().err
+
+
+def test_cli_missing_source_is_reported(tmp_path: Path, capsys):
+    from fractalgen.cli import main
+
+    assert main(["from-image", str(tmp_path / "nope")]) == 2
+    assert "no such file or directory" in capsys.readouterr().err

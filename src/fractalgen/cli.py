@@ -46,7 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
     from_image = subparsers.add_parser(
         "from-image", help="derive a palette + map modifier from an image, then render"
     )
-    from_image.add_argument("image", help="source image (jpg/png/...)")
+    from_image.add_argument(
+        "image",
+        nargs="?",
+        default=None,
+        help="source image or directory of images (default: ./photos)",
+    )
     from_image.add_argument("-o", "--output", help="output path (also where the raster assets go)")
     from_image.add_argument("--base", help="base JSON config to start from")
     from_image.add_argument("--colours", type=int, default=6, help="number of palette colours")
@@ -57,6 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
     from_image.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="config override")
     from_image.add_argument("-w", "--workers", type=int, help="worker processes (0 = all cores)")
     from_image.add_argument("-v", "--verbose", action="store_true")
+
+    ui = subparsers.add_parser("ui", help="serve the local web UI")
+    ui.add_argument("--host", default="127.0.0.1", help="bind address (loopback by default)")
+    ui.add_argument("--port", type=int, default=8123, help="port (0 picks a free one)")
+    ui.add_argument("--no-open", action="store_true", help="do not open a browser")
 
     schema = subparsers.add_parser("schema", help="print the configuration JSON schema")
     schema.add_argument("--indent", type=int, default=2)
@@ -77,6 +87,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if arguments.command == "example":
             print(json.dumps(example_config(arguments.form), indent=2))
+            return 0
+        if arguments.command == "ui":
+            from .ui import serve
+
+            serve(host=arguments.host, port=arguments.port, open_browser=not arguments.no_open)
             return 0
         return _render(arguments)
     except ConfigError as error:
@@ -108,29 +123,69 @@ def _render(arguments: argparse.Namespace) -> int:
 
 
 def _render_from_image(arguments: argparse.Namespace) -> int:
-    """Build a config from an image (palette + raster map), then render it."""
-    from .image_import import analyse_image, config_from_image, write_assets
+    """Build a config from an image (palette + raster map), then render it.
+
+    The argument may be a directory (or omitted, which means ``./photos``): every
+    supported image inside is processed, so dropping a shoot into ``photos/`` and
+    running ``fractalgen from-image`` is the whole workflow.
+    """
+    from .image_import import IMAGE_SUFFIXES, analyse_image, config_from_image, write_assets
 
     base = load_config(arguments.base) if arguments.base else Config.from_dict(example_config("image"))
-    target = Path(arguments.output).expanduser().resolve() if arguments.output else base.resolve_output()
-    if target is None:
-        target = Path.cwd() / "out" / "fractal.png"
+    source = Path(arguments.image).expanduser() if arguments.image else Path("photos")
+    sources = _collect_images(source)
+    if not sources:
+        raise ConfigError(f"no images found in {source} (supported: {', '.join(sorted(IMAGE_SUFFIXES))})")
 
-    analysis = analyse_image(arguments.image, colours=arguments.colours, raster_size=arguments.raster_size)
-    name = Path(arguments.image).stem
-    raster_path, palette_path = write_assets(analysis, target.parent, stem=name)
-    print(f"wrote {raster_path}")
-    print(f"wrote {palette_path}")
+    output_root = Path(arguments.output).expanduser().resolve() if arguments.output else None
+    exit_code = 0
+    for image in sources:
+        try:
+            exit_code |= _render_one_image(arguments, base, image, output_root)
+        except (ConfigError, FileNotFoundError) as error:
+            print(f"{image.name}: {error}", file=sys.stderr)
+            exit_code = 2
+    return exit_code
+
+
+def _collect_images(source: Path) -> list[Path]:
+    from .image_import import IMAGE_SUFFIXES
+
+    if source.is_dir():
+        return sorted(
+            path for path in source.iterdir() if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+        )
+    if source.is_file():
+        return [source]
+    raise ConfigError(f"{source}: no such file or directory")
+
+
+def _render_one_image(arguments: argparse.Namespace, base: Config, image: Path, output_root: Path | None) -> int:
+    from .image_import import analyse_image, config_from_image, write_assets
+
+    if output_root is None:
+        # Batch renders default to ./out/<stem>.png; a base config's own output
+        # path belongs to `fractalgen render`, not to a folder of photos.
+        target = Path.cwd() / "out" / f"{image.stem}.png"
+    elif output_root.suffix:
+        # An explicit file path only makes sense for a single source image.
+        target = output_root
+    else:
+        target = output_root / f"{image.stem}.png"
+
+    analysis = analyse_image(image, colours=arguments.colours, raster_size=arguments.raster_size)
+    raster_path, palette_path = write_assets(analysis, target.parent, stem=image.stem)
+    print(f"{image.name}: {len(analysis.colours)} colours -> {palette_path.name}, raster -> {raster_path.name}")
 
     config = config_from_image(
         base,
-        arguments.image,
+        image,
         colours=arguments.colours,
         raster_size=arguments.raster_size,
         strength=arguments.strength,
         blend=arguments.blend,
         output=target,
-        stem=name,
+        stem=image.stem,
     )
     for item in arguments.set or []:
         if "=" not in item:
@@ -147,7 +202,7 @@ def _render_from_image(arguments: argparse.Namespace) -> int:
 
     rendered = render_image(config)
     if rendered.path is not None:
-        print(f"wrote {rendered.path}")
+        print(f"{image.name}: wrote {rendered.path}")
     return 0
 
 

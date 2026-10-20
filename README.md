@@ -3,7 +3,7 @@
 Procedural root-finding fractals (Newton / Halley, *RFA* and *nova* variants) with
 relief shading, palettes, animations and an optional NFT collection front-end.
 
-```
+```text
 src/fractalgen/     fractal maths, rendering, animation   (no NFT code)
 src/nftgen/         collection generator built on fractalgen
 examples/configs/   ready-to-run JSON configs
@@ -68,6 +68,31 @@ nftgen generate examples/configs/collection.json
 
 `--set section.key=value` overrides any field (values are parsed as JSON when
 possible), so the CLI never needs a second parameter syntax.
+
+## Web UI
+
+```bash
+fractalgen ui                 # http://127.0.0.1:8123 (opens a browser)
+fractalgen ui --port 9000 --no-open
+python -m fractalgen.ui       # same thing
+```
+
+A single page, served locally, with every configuration field (grouped in
+collapsible sections), a **Generate** button, a preview pane (PNG or GIF), palette
+swatches, a "New polynomial" seed randomiser, an image-import control and a
+"Download config" button. The form is generated from `GET /api/schema`, which is
+derived from the config dataclasses, so new fields appear automatically.
+
+Endpoints: `GET /api/schema`, `POST /api/render`, `POST /api/from-image`,
+`GET /outputs/<file>`, `GET /api/health`. Standard library only (`http.server`),
+no build step, no external assets.
+
+Safety notes: binds to `127.0.0.1` by default, renders are serialised behind one
+lock and run in a worker thread with a timeout, request bodies are capped at
+8 MB, output names are whitelisted (no separators, resolved inside the output
+directory), and the only thing the request body can do is populate the
+configuration model. UI renders default to `runtime.workers = 1` - the solver's
+process pool spawns children, which is not what you want inside a request thread.
 
 ## Configuration
 
@@ -208,9 +233,17 @@ through correlated key fields: film grain rather than TV static.
 ## Image import (palette + map modifier)
 
 ```bash
-fractalgen from-image photo.jpg --colours 6 --raster-size 96 --strength 1.4 -o out/portrait.png
-fractalgen from-image photo.jpg --raster-only -o out/portrait.png   # just the assets
+mkdir -p photos && cp shoot/*.jpg photos/
+fractalgen from-image                                   # every image in ./photos -> out/<name>.png
+fractalgen from-image photos                            # same, explicit folder
+fractalgen from-image photos/portrait.jpg -o out/p.png   # one image
+fractalgen from-image --raster-only                     # assets only (palette + raster)
 ```
+
+`photos/` is the drop folder: it is git-ignored (only `photos/.gitkeep` is tracked),
+and running `from-image` with no argument processes every `.png/.jpg/.jpeg/.webp/
+.bmp/.tif/.tiff/.gif` inside it. Outputs default to `out/<name>.png` with
+`<name>_palette.json` and `<name>_raster.png` next to them.
 
 Three things come out of one picture:
 
