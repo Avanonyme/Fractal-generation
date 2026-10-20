@@ -166,7 +166,8 @@ def test_flicker_puts_stars_on_the_fractal(tmp_path: Path):
     lit = delta > 6
     assert lit.any(), "the effect changed nothing"
     body = np.asarray(ndimage.binary_dilation(rendered.fractal.boundary, iterations=3), dtype=bool)
-    assert bool((lit & body).sum()) / max(1, int(lit.sum())) > 0.85
+    covered = int(np.count_nonzero(lit & body))
+    assert covered / max(1, int(np.count_nonzero(lit))) > 0.85
     # points, not blobs: the lit area stays sparse (small frames amplify the share)
     assert lit.mean() < 0.12
 
