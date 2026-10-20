@@ -83,7 +83,18 @@ def build_frame(
         # colour at the orbit's closest approach (iq's bitmap traps, Carlson).
         if fractal.trap_colour is None:
             raise ValueError("return_type 'trap' needs an orbit trap image")
-        rgb = render.to_uint8(np.clip(fractal.trap_colour, 0.0, 1.0) * 255.0)
+        # Keep the fractal's structure inside the trap colours: without it the
+        # flat regions of the trapped picture dominate and the frame turns into
+        # tiled wallpaper.
+        structure = render.normalise(smooth_field(fractal.scalar_field("iteration"), 1.0))
+        trapped = np.clip(fractal.trap_colour, 0.0, 1.0) * 255.0 * (0.35 + 0.65 * structure)[..., None]
+        mix = image_config.trap_mix
+        if mix < 1.0:
+            # Bitmap traps smear along the orbit paths; mixing the fractal's own
+            # colouring back in is the only thing that softens those streaks.
+            plain = render.colorize(fractal.scalar_field("iteration"), cmap).astype(np.float64)
+            trapped = plain * (1.0 - mix) + trapped * mix
+        rgb = render.to_uint8(np.clip(trapped, 0.0, 255.0))
     elif image_config.return_type == "image":
         # The source image supplies the colour, the fractal supplies the
         # structure. An orbit trap alone cannot do this: it reports how close an

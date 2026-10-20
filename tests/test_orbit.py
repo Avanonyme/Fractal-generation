@@ -151,3 +151,91 @@ def test_trap_colour_requires_a_trap_image(tmp_path):
     config = Config.from_dict({"fractal": {"size": 64}, "image": {"return_type": "trap"}})
     with pytest.raises(ValueError, match="needs an orbit trap"):
         render_image(config)
+
+
+def test_trap_scale_tiles_the_image_smaller():
+    """scale > 1 must repeat the trap image instead of one giant copy."""
+    bitmap = np.zeros((64, 64))
+    bitmap[16:48, 16:48] = 255  # a square in the middle
+    domain = Domain()
+    # One tile is 2 / scale wide in plane units, so wrapping makes the sample
+    # periodic at that offset.
+    period = 2.0 / 4.0
+    tiled = OrbitTrap.from_bitmap(bitmap, scale=4.0, wrap=True)
+    base = tiled.sample(np.array([0.10 + 0.10j]), domain)[0]
+    shifted = tiled.sample(np.array([0.10 + period + 0.10j]), domain)[0]
+    assert base == pytest.approx(shifted, abs=1e-9)
+
+    clamped = OrbitTrap.from_bitmap(bitmap, scale=4.0, wrap=False)
+    assert clamped.sample(np.array([0.10 + 0.10j]), domain)[0] != pytest.approx(
+        clamped.sample(np.array([0.10 + period + 0.10j]), domain)[0], abs=1e-9
+    )
+
+    from fractalgen.config import Config, ConfigError
+
+    config = Config.from_dict({"fractal": {"orbit_trap": {"scale": 3, "wrap": True}}})
+    assert config.fractal.orbit_trap.scale == 3
+    with pytest.raises(ConfigError, match="scale"):
+        Config.from_dict({"fractal": {"orbit_trap": {"scale": 0}}})
+
+
+def test_trap_structure_is_kept_inside_the_colours(tmp_path):
+    """Trap colouring must not become flat wallpaper: variance has to survive."""
+    import numpy as np
+    from PIL import Image
+
+    from fractalgen import Config, render_image
+
+    bitmap = _tree_bitmap(96)
+    path = tmp_path / "tree.png"
+    Image.fromarray(np.dstack([bitmap, bitmap, bitmap]).astype(np.uint8)).save(path)
+    config = Config.from_dict(
+        {
+            "fractal": {
+                "size": 160,
+                "iterations": 60,
+                "polynomial": {"mode": "roots", "roots": [[1, 0], [-1, 0], [0, 1], [0, -1]]},
+                "orbit_trap": {"image": str(path), "size": 96, "scale": 2, "wrap": True},
+            },
+            "image": {"return_type": "trap", "shading": {"type": "none"}},
+        }
+    )
+    rendered = render_image(config).rgb.astype(float)
+    assert rendered.std() > 20.0
+    assert rendered.mean() < 245.0
+
+
+def test_trap_mix_fades_the_trap(tmp_path):
+    """Lower trap_mix must move the frame back towards the fractal's own colours."""
+    import numpy as np
+    from PIL import Image
+
+    from fractalgen import Config, render_image
+
+    bitmap = _tree_bitmap(64)
+    path = tmp_path / "tree.png"
+    Image.fromarray(np.dstack([bitmap, bitmap, bitmap]).astype(np.uint8)).save(path)
+
+    def render(mix: float) -> np.ndarray:
+        config = Config.from_dict(
+            {
+                "fractal": {
+                    "size": 96,
+                    "iterations": 40,
+                    "polynomial": {"mode": "roots", "roots": [[1, 0], [-1, 0], [0, 1], [0, -1]]},
+                    "orbit_trap": {"image": str(path), "size": 64, "scale": 2, "wrap": True},
+                },
+                "colour": {"mode": "matplotlib", "name": "viridis"},
+                "image": {"return_type": "trap", "trap_mix": mix, "shading": {"type": "none"}},
+            }
+        )
+        return render_image(config).rgb.astype(float)
+
+    full = render(1.0)
+    faded = render(0.0)
+    assert np.abs(full - faded).mean() > 5.0
+
+    from fractalgen.config import ConfigError
+
+    with pytest.raises(ConfigError, match="trap_mix"):
+        Config.from_dict({"image": {"trap_mix": 2.0}})

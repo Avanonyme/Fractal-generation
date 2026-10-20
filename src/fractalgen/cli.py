@@ -59,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
     from_image.add_argument("--strength", type=float, default=1.4, help="map-modifier strength")
     from_image.add_argument("--blend", type=float, default=0.8, help="image-space blend (0..1)")
     from_image.add_argument(
+        "--trap-scale",
+        type=float,
+        default=2.0,
+        help="how many times the trap image spans the frame (trap colouring)",
+    )
+    from_image.add_argument(
         "--return-type",
         default=None,
         help="colour field: image (blend), trap (orbit-trap colouring), iteration, smooth, ...",
@@ -190,6 +196,7 @@ def _render_one_image(arguments: argparse.Namespace, base: Config, image: Path, 
         strength=arguments.strength,
         blend=arguments.blend,
         return_type=arguments.return_type,
+        trap_scale=arguments.trap_scale,
         output=target,
         stem=image.stem,
     )

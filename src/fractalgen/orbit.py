@@ -43,7 +43,7 @@ class OrbitTrap:
     trapped image readable.
     """
 
-    __slots__ = ("field", "mode", "colour", "colour_mode")
+    __slots__ = ("field", "mode", "colour", "colour_mode", "scale", "offset", "wrap")
 
     def __init__(
         self,
@@ -51,6 +51,9 @@ class OrbitTrap:
         mode: int = 1,
         colour: np.ndarray | None = None,
         colour_mode: str = "closest",
+        scale: float = 1.0,
+        offset: complex = 0j,
+        wrap: bool = False,
     ) -> None:
         self.field = np.asarray(field, dtype=np.float64)
         self.mode = as_int(mode, "orbit_trap.distance_mode")
@@ -60,6 +63,10 @@ class OrbitTrap:
         #: (iq's bitmap orbit traps, Carlson's artistic orbit traps).
         self.colour = None if colour is None else np.asarray(colour, dtype=np.float64)
         self.colour_mode = colour_mode
+        #: Tiling factor: 3 means the picture covers a third of the frame.
+        self.scale = float(scale)
+        self.offset = complex(offset)
+        self.wrap = bool(wrap)
 
     @classmethod
     def from_bitmap(
@@ -68,6 +75,9 @@ class OrbitTrap:
         mode: int = 1,
         colour: np.ndarray | None = None,
         colour_mode: str = "closest",
+        scale: float = 1.0,
+        offset: complex = 0j,
+        wrap: bool = False,
     ) -> "OrbitTrap":
         """Build a trap from any bitmap: pixels above its median are "inside".
 
@@ -87,10 +97,41 @@ class OrbitTrap:
             # so a plain upload still renders instead of failing the whole request.
             span = float(values.max() - values.min())
             smooth = (values - values.min()) / span if span > 0 else np.zeros_like(values)
-            return cls(1.0 - smooth, mode, colour, colour_mode)
+            return cls(1.0 - smooth, mode, colour, colour_mode, scale, offset, wrap)
         distance = np.asarray(ndimage.distance_transform_edt(np.logical_not(inside)), dtype=np.float64)
-        scale = float(distance.max())
-        return cls(distance / scale if scale > 0 else distance, mode, colour, colour_mode)
+        span = float(distance.max())
+        return cls(distance / span if span > 0 else distance, mode, colour, colour_mode, scale, offset, wrap)
+
+    def image_coordinates(self, z: np.ndarray, domain=None) -> tuple[np.ndarray, np.ndarray]:
+        """Map complex points to (row, column) in the trap image.
+
+        ``scale`` tiles the picture: 3 means it covers a third of the frame and
+        repeats, which is how a large trap image is made smaller.
+        """
+        plane = np.asarray(z, dtype=np.complex128).reshape(-1)
+        height, width = self.field.shape
+
+        if domain is None:
+            x_min = y_min = -1.0
+            span_x = span_y = 2.0
+        else:
+            x_min, y_min = domain.x_min, domain.y_min
+            span_x, span_y = domain.width, domain.height
+
+        shifted = (plane - self.offset) * self.scale
+        column = (np.real(shifted) - x_min) / span_x * (width - 1)
+        row = (np.imag(shifted) - y_min) / span_y * (height - 1)
+        if self.wrap:
+            column = np.mod(column, width)
+            row = np.mod(row, height)
+        else:
+            column = np.clip(column, 0, width - 1)
+            row = np.clip(row, 0, height - 1)
+        return row, column
+
+    @property
+    def sample_mode(self) -> str:
+        return "grid-wrap" if self.wrap else "nearest"
 
     def sample(self, z: np.ndarray, domain=None) -> np.ndarray:
         """Distance value for each complex point of ``z`` (flattened output).
@@ -110,25 +151,14 @@ class OrbitTrap:
         from scipy import ndimage
 
         plane = np.asarray(z, dtype=np.complex128).reshape(-1)
-        height, width = self.field.shape
-
-        if domain is None:
-            x_min = y_min = -1.0
-            span_x = span_y = 2.0
-        else:
-            x_min, y_min = domain.x_min, domain.y_min
-            span_x, span_y = domain.width, domain.height
-
-        column = (np.real(plane) - x_min) / span_x * (width - 1)
-        row = (np.imag(plane) - y_min) / span_y * (height - 1)
+        width, height = self.field.shape
+        row, column = self.image_coordinates(plane, domain)
         inside = (
-            (column >= 0) & (column <= width - 1) & (row >= 0) & (row <= height - 1)
+            (column >= 0) & (column <= width) & (row >= 0) & (row <= height)
         )
-        column = np.clip(column, 0, width - 1)
-        row = np.clip(row, 0, height - 1)
-
         base = np.asarray(
-            ndimage.map_coordinates(self.field, [row, column], order=1, mode="nearest"), dtype=np.float64
+            ndimage.map_coordinates(self.field, [row, column], order=1, mode=self.sample_mode),
+            dtype=np.float64,
         )
         # Points outside the window must not pretend to be near the shape.
         far = float(self.field.max())
@@ -176,19 +206,9 @@ def sample_colour(trap: OrbitTrap, z: np.ndarray, domain=None) -> np.ndarray:
     if trap.colour is None:
         return np.zeros((np.asarray(z).size, 3))
     plane = np.asarray(z, dtype=np.complex128).reshape(-1)
-    height, width = trap.colour.shape[:2]
-
-    if domain is None:
-        x_min = y_min = -1.0
-        span_x = span_y = 2.0
-    else:
-        x_min, y_min = domain.x_min, domain.y_min
-        span_x, span_y = domain.width, domain.height
-
-    column = np.clip((np.real(plane) - x_min) / span_x * (width - 1), 0, width - 1)
-    row = np.clip((np.imag(plane) - y_min) / span_y * (height - 1), 0, height - 1)
+    row, column = trap.image_coordinates(plane, domain)
     channels = [
-        ndimage.map_coordinates(trap.colour[..., channel], [row, column], order=1, mode="nearest")
+        ndimage.map_coordinates(trap.colour[..., channel], [row, column], order=1, mode=trap.sample_mode)
         for channel in range(3)
     ]
     return np.stack(channels, axis=1)
@@ -203,7 +223,13 @@ def load_orbit_trap(config: OrbitTrapConfig, base_dir: Path) -> OrbitTrap | None
         raise FileNotFoundError(f"orbit trap image not found: {path}")
     bitmap = _read_bitmap(path, config.size)
     return OrbitTrap.from_bitmap(
-        bitmap, config.distance_mode, _read_colour(path, config.size), config.colour_mode
+        bitmap,
+        config.distance_mode,
+        _read_colour(path, config.size),
+        config.colour_mode,
+        config.scale,
+        config.offset,
+        config.wrap,
     )
 
 

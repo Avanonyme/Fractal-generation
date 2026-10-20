@@ -380,6 +380,14 @@ class OrbitTrapConfig:
     #: ``average`` = mean of the trap colours along the whole orbit,
     #: ``last`` = colour at the last sampled orbit point.
     colour_mode: str = "closest"
+    #: How many times the trap image spans the frame. 1 = once (the picture is as
+    #: big as the render), 3 = a third of the frame, tiled 3x3, etc.
+    scale: float = 1.0
+    #: Shift of the trap image, in plane units (before scaling).
+    offset: complex = 0j
+    #: Tile instead of clamping at the border. With ``wrap`` on, a trap image
+    #: repeats across the plane instead of smearing at its edges.
+    wrap: bool = False
 
     COLOUR_MODES = ("closest", "average", "last")
 
@@ -392,6 +400,8 @@ class OrbitTrapConfig:
             )
         if self.size < 16:
             raise ConfigError("fractal.orbit_trap.size: must be >= 16")
+        if self.scale <= 0:
+            raise ConfigError("fractal.orbit_trap.scale: must be > 0")
 
     @property
     def enabled(self) -> bool:
@@ -402,13 +412,18 @@ class OrbitTrapConfig:
         if isinstance(value, OrbitTrapConfig):
             return value
         data = _require_mapping(value, path)
-        _check_keys(data, ["image", "size", "distance_mode", "colour_mode"], path)
+        _check_keys(
+            data, ["image", "size", "distance_mode", "colour_mode", "scale", "offset", "wrap"], path
+        )
         default = cls()
         return cls(
             image=_as_path(data.get("image"), f"{path}.image"),
             size=_as_int(data.get("size", default.size), f"{path}.size", minimum=16),
             distance_mode=_as_int(data.get("distance_mode", default.distance_mode), f"{path}.distance_mode"),
             colour_mode=_as_choice(data.get("colour_mode", default.colour_mode), cls.COLOUR_MODES, f"{path}.colour_mode"),
+            scale=_as_float(data.get("scale", default.scale), f"{path}.scale"),
+            offset=_single_complex(data.get("offset", default.offset), f"{path}.offset"),
+            wrap=_as_bool(data.get("wrap", default.wrap), f"{path}.wrap"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -417,6 +432,9 @@ class OrbitTrapConfig:
             "size": self.size,
             "distance_mode": self.distance_mode,
             "colour_mode": self.colour_mode,
+            "scale": self.scale,
+            "offset": [self.offset.real, self.offset.imag],
+            "wrap": self.wrap,
         }
 
 
@@ -852,6 +870,10 @@ class ImageConfig:
     #: Gaussian blur (pixels) applied to the colour field before colouring.
     smooth: float = 0.0
     shading: ShadingConfig = field(default_factory=ShadingConfig)
+    #: How strongly ``return_type: trap`` replaces the fractal's own colours with
+    #: the trap image (1 = trap only, 0 = fractal only). Lower values fade the
+    #: streaks that bitmap traps leave along the orbit paths.
+    trap_mix: float = 0.7
     #: Post-render filters, applied in order to the finished frame.
     postprocess: tuple[PostprocessConfig, ...] = (
         PostprocessConfig("deband"),
@@ -877,6 +899,8 @@ class ImageConfig:
             raise ConfigError("image.alpha: must be within 0..255")
         if self.smooth < 0:
             raise ConfigError("image.smooth: must be >= 0")
+        if not 0.0 <= self.trap_mix <= 1.0:
+            raise ConfigError("image.trap_mix: must be within 0..1")
 
     @classmethod
     def from_dict(cls, value: Any, path: str = "image") -> "ImageConfig":
@@ -884,13 +908,16 @@ class ImageConfig:
             return value
         data = _require_mapping(value, path)
         _check_keys(
-            data, ["return_type", "return", "smooth", "shading", "postprocess", "background", "alpha"], path
+            data,
+            ["return_type", "return", "smooth", "trap_mix", "shading", "postprocess", "background", "alpha"],
+            path,
         )
         default = cls()
         return_type = data.get("return_type", data.get("return", default.return_type))
         return cls(
             return_type=_as_choice(return_type, cls.RETURN_TYPES, f"{path}.return_type"),
             smooth=_as_float(data.get("smooth", default.smooth), f"{path}.smooth"),
+            trap_mix=_as_float(data.get("trap_mix", default.trap_mix), f"{path}.trap_mix"),
             postprocess=_parse_postprocess(data.get("postprocess", default.postprocess), f"{path}.postprocess"),
             shading=ShadingConfig.from_dict(data.get("shading", {}), f"{path}.shading"),
             background=_as_path(data.get("background"), f"{path}.background"),
@@ -901,6 +928,7 @@ class ImageConfig:
         return {
             "return_type": self.return_type,
             "smooth": self.smooth,
+            "trap_mix": self.trap_mix,
             "shading": self.shading.to_dict(),
             "postprocess": [step.to_dict() for step in self.postprocess],
             "background": None if self.background is None else str(self.background),

@@ -219,6 +219,7 @@ def config_from_image(
     output: str | Path | None = None,
     stem: str | None = None,
     return_type: str | None = None,
+    trap_scale: float = 2.0,
 ) -> Config:
     """Return a copy of ``config`` wired to the image's palette, map and trap.
 
@@ -239,11 +240,22 @@ def config_from_image(
     # Orbit-trap colouring needs the picture's colours, not its luminance raster.
     render_type = return_type or config.image.return_type
     trap_image = source if render_type == "trap" else raster_path
+    # Trap colouring repeats the picture across the basins; tiling it at a
+    # fraction of the frame keeps the picture reading as a texture instead of
+    # four giant copies.
+    trap_scale = as_float(trap_scale, "image.trap_scale")
+    tiled = render_type == "trap"
 
     fractal = config.fractal
     mapped = replace(
         fractal,
-        orbit_trap=OrbitTrapConfig(image=trap_image, size=raster_size, distance_mode=1),
+        orbit_trap=OrbitTrapConfig(
+            image=trap_image,
+            size=raster_size,
+            distance_mode=1,
+            scale=trap_scale if tiled else 1.0,
+            wrap=tiled,
+        ),
         map=MapConfig(
             image=raster_path,
             strength=as_float(strength, "image.strength"),

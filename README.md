@@ -272,8 +272,22 @@ orbit trapping instead samples the **trap image's colour at every orbit point**
 ```
 
 `orbit_trap.colour_mode` picks the sample: `closest` (default - colour at the
-orbit's closest approach, the picture reads clearly and repeats across basins),
-`average` (mean along the orbit, pale) or `last` (colour at the final orbit point).
+orbit's closest approach), `average` (mean along the orbit, pale) or `last`
+(colour at the final orbit point).
+
+Bitmap traps leave **streaks along the orbit paths** (a Newton orbit travels in a
+near-straight line to its root, and whatever colour it meets smears along it - iq's
+own bitmap traps show the same). `image.trap_mix` (0..1, default `0.7`) mixes the
+fractal's own colouring back in to fade them; `0.3-0.5` keeps the picture readable
+without the rays dominating. If you want the photo with no streaks at all, use
+`return_type: image` instead - that path never samples the orbit.
+
+`orbit_trap.scale` decides how big the picture is: `1` makes it span the frame
+(one huge copy per basin), `2-3` tiles it smaller, which is what makes trap
+colouring usable as a texture. `orbit_trap.wrap` tiles instead of smearing at the
+edges (`--trap-scale` sets both from the CLI, default `2`). The fractal's own
+structure is kept inside the trap colours - without it, the picture's flat regions
+turn the frame into wallpaper.
 
 If the picture must sit in the frame *as drawn*, use `fractal.map.blend` or
 `image.return_type: "image"` (picture colours, fractal as texture) instead.
