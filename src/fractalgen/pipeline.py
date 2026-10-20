@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import render
+from . import postprocess, render
 from ._numeric import as_float, as_int
 from .animations import EFFECTS, AnimationContext, resolve_effect_params
 from .colour import build_colormap
@@ -91,6 +91,9 @@ def build_frame(
         if height_range is not None:
             height = render.normalise_with(height, height_range)
         rgb = render.modulate(rgb, relief(height, shading_config), shading_config.strength)
+
+    if image_config.postprocess:
+        rgb = postprocess.apply_all(image_config.postprocess, rgb)
 
     if background is not None:
         rgb = render.compose_over(rgb, background, image_config.alpha)

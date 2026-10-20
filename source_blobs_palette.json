@@ -1,0 +1,15 @@
+{
+  "colours": [
+    "#170ED4",
+    "#3F20A5",
+    "#69437B",
+    "#966C53",
+    "#BDA433",
+    "#E3D715"
+  ],
+  "source": {
+    "width": 256,
+    "height": 256
+  },
+  "raster": "source_blobs_raster.png"
+}

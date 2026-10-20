@@ -43,6 +43,20 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="config override")
         command.add_argument("--fullscreen", action="store_true", help=argparse.SUPPRESS)
 
+    from_image = subparsers.add_parser(
+        "from-image", help="derive a palette + map modifier from an image, then render"
+    )
+    from_image.add_argument("image", help="source image (jpg/png/...)")
+    from_image.add_argument("-o", "--output", help="output path (also where the raster assets go)")
+    from_image.add_argument("--base", help="base JSON config to start from")
+    from_image.add_argument("--colours", type=int, default=6, help="number of palette colours")
+    from_image.add_argument("--raster-size", type=int, default=96, help="raster resolution")
+    from_image.add_argument("--strength", type=float, default=1.4, help="map-modifier strength")
+    from_image.add_argument("--raster-only", action="store_true", help="write the assets, skip the render")
+    from_image.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="config override")
+    from_image.add_argument("-w", "--workers", type=int, help="worker processes (0 = all cores)")
+    from_image.add_argument("-v", "--verbose", action="store_true")
+
     schema = subparsers.add_parser("schema", help="print the configuration JSON schema")
     schema.add_argument("--indent", type=int, default=2)
 
@@ -73,6 +87,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _render(arguments: argparse.Namespace) -> int:
+    if arguments.command == "from-image":
+        return _render_from_image(arguments)
+
     config = _load(arguments)
     if config.form == "video":
         if config.output is None:
@@ -86,6 +103,49 @@ def _render(arguments: argparse.Namespace) -> int:
         print(f"wrote {rendered.path}")
     else:
         print(f"rendered {rendered.rgb.shape[1]}x{rendered.rgb.shape[0]} frame (no output path)")
+    return 0
+
+
+def _render_from_image(arguments: argparse.Namespace) -> int:
+    """Build a config from an image (palette + raster map), then render it."""
+    from .image_import import analyse_image, config_from_image, write_assets
+
+    base = load_config(arguments.base) if arguments.base else Config.from_dict(example_config("image"))
+    target = Path(arguments.output).expanduser().resolve() if arguments.output else base.resolve_output()
+    if target is None:
+        target = Path.cwd() / "out" / "fractal.png"
+
+    analysis = analyse_image(arguments.image, colours=arguments.colours, raster_size=arguments.raster_size)
+    name = Path(arguments.image).stem
+    raster_path, palette_path = write_assets(analysis, target.parent, stem=name)
+    print(f"wrote {raster_path}")
+    print(f"wrote {palette_path}")
+
+    config = config_from_image(
+        base,
+        arguments.image,
+        colours=arguments.colours,
+        raster_size=arguments.raster_size,
+        strength=arguments.strength,
+        output=target,
+        stem=name,
+    )
+    for item in arguments.set or []:
+        if "=" not in item:
+            raise ConfigError(f"--set expects KEY=VALUE, got {item!r}")
+        key, raw = item.split("=", 1)
+        config = _apply_override(config, key, _parse_override(raw))
+    if arguments.workers is not None:
+        config = _apply_override(config, "runtime.workers", arguments.workers)
+    if arguments.verbose:
+        config = _apply_override(config, "runtime.verbose", True)
+
+    if arguments.raster_only:
+        return 0
+
+    rendered = render_image(config)
+    if rendered.path is not None:
+        print(f"wrote {rendered.path}")
     return 0
 
 

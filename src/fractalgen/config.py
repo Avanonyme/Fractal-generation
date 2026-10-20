@@ -30,6 +30,7 @@ __all__ = [
     "Domain",
     "PolynomialConfig",
     "OrbitTrapConfig",
+    "MapConfig",
     "FractalConfig",
     "ShadingConfig",
     "ColourConfig",
@@ -403,6 +404,69 @@ class OrbitTrapConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class MapConfig:
+    """Per-pixel modulation of the iteration by a raster image.
+
+    The image is sampled at each pixel's *starting position* and scales the
+    damping of the root finder, so the local dynamics (and therefore the basin
+    pattern) follow the picture. This is the "map modifier" that makes a source
+    image readable inside the fractal; an orbit trap alone echoes the shape but
+    does not reproduce it, because a Newton orbit collapses onto a root long
+    before it can sample much of the trap.
+
+    ``strength`` is the half-range of the damping multiplier: the damping used at
+    a pixel of luminance ``v`` is ``damping * (1 + strength * (v - 0.5))``, so
+    ``0`` disables the modulation and ``2`` roughly doubles/halves it.
+    """
+
+    image: Path | None = None
+    strength: float = 0.0
+    size: int = 96
+    #: ``damping`` scales the Newton damping per pixel; it is the mode that makes
+    #: a picture actually readable inside the fractal (the basin pattern follows
+    #: the image). ``warp`` displaces the starting point along the image gradient:
+    #: linear and gentle, it nudges the pattern without flattening anything, so a
+    #: photo only faintly shows through.
+    mode: str = "damping"
+
+    MODES = ("warp", "damping")
+
+    def __post_init__(self) -> None:
+        if self.mode not in self.MODES:
+            raise ConfigError(f"fractal.map.mode: expected one of {list(self.MODES)}, got {self.mode!r}")
+        if self.strength < 0:
+            raise ConfigError("fractal.map.strength: must be >= 0")
+        if self.size < 8:
+            raise ConfigError("fractal.map.size: must be >= 8")
+
+    @property
+    def enabled(self) -> bool:
+        return self.image is not None and self.strength > 0
+
+    @classmethod
+    def from_dict(cls, value: Any, path: str = "fractal.map") -> "MapConfig":
+        if isinstance(value, MapConfig):
+            return value
+        data = _require_mapping(value, path)
+        _check_keys(data, ["image", "strength", "size", "mode"], path)
+        default = cls()
+        return cls(
+            image=_as_path(data.get("image"), f"{path}.image"),
+            strength=_as_float(data.get("strength", default.strength), f"{path}.strength"),
+            size=_as_int(data.get("size", default.size), f"{path}.size", minimum=8),
+            mode=_as_choice(data.get("mode", default.mode), cls.MODES, f"{path}.mode"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "image": None if self.image is None else str(self.image),
+            "strength": self.strength,
+            "size": self.size,
+            "mode": self.mode,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class FractalConfig:
     """Numerical description of the fractal itself (no rendering concerns)."""
 
@@ -422,6 +486,7 @@ class FractalConfig:
     round_digits: int = 4
     polynomial: PolynomialConfig = field(default_factory=PolynomialConfig)
     orbit_trap: OrbitTrapConfig = field(default_factory=OrbitTrapConfig)
+    map: MapConfig = field(default_factory=MapConfig)
 
     METHODS = ("newton", "halley")
     VARIANTS = ("standard", "nova")
@@ -462,6 +527,7 @@ class FractalConfig:
                 "round_digits",
                 "polynomial",
                 "orbit_trap",
+                "map",
             ],
             path,
         )
@@ -483,6 +549,7 @@ class FractalConfig:
             round_digits=_as_int(data.get("round_digits", default.round_digits), f"{path}.round_digits"),
             polynomial=PolynomialConfig.from_dict(data.get("polynomial", {}), f"{path}.polynomial"),
             orbit_trap=OrbitTrapConfig.from_dict(data.get("orbit_trap", {}), f"{path}.orbit_trap"),
+            map=MapConfig.from_dict(data.get("map", {}), f"{path}.map"),
         )
 
     def derive(self, **changes: Any) -> "FractalConfig":
@@ -503,6 +570,7 @@ class FractalConfig:
             "round_digits": self.round_digits,
             "polynomial": self.polynomial.to_dict(),
             "orbit_trap": self.orbit_trap.to_dict(),
+            "map": self.map.to_dict(),
         }
 
 
@@ -714,14 +782,54 @@ def _colour_entry(value: Any, path: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class PostprocessConfig:
+    """One post-render filter (see :mod:`fractalgen.postprocess`).
+
+    Parameters are kept as a plain mapping and validated by the filter itself,
+    so a typo is reported with the filter's own list of accepted keys.
+    """
+
+    name: str
+    params: Mapping[str, Any] = field(default_factory=dict)
+
+    NAMES = ("deband", "unsharp")
+
+    def __post_init__(self) -> None:
+        if self.name not in self.NAMES:
+            raise ConfigError(f"postprocess.name: expected one of {list(self.NAMES)}, got {self.name!r}")
+
+    @classmethod
+    def from_dict(cls, value: Any, path: str) -> "PostprocessConfig":
+        if isinstance(value, PostprocessConfig):
+            return value
+        if isinstance(value, str):
+            return cls(_as_choice(value, cls.NAMES, path))
+        data = _require_mapping(value, path)
+        if "name" not in data:
+            raise ConfigError(f"{path}: missing 'name'")
+        name = _as_choice(data["name"], cls.NAMES, f"{path}.name")
+        return cls(name=name, params={key: item for key, item in data.items() if key != "name"})
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"name": self.name, **dict(self.params)}
+
+
+@dataclass(frozen=True, slots=True)
 class ImageConfig:
     """What a single rendered frame contains."""
 
-    return_type: str = "smooth"
-    #: Gaussian blur (pixels) applied to the colour field. It softens the kinks
-    #: the colormap would otherwise turn into visible contour rings; 0 disables.
-    smooth: float = 2.0
+    #: ``iteration`` keeps the classic banded look (the rings are removed
+    #: afterwards by the ``deband`` post filter); ``smooth`` colours by basin
+    #: identity and has no rings by construction.
+    return_type: str = "iteration"
+    #: Gaussian blur (pixels) applied to the colour field before colouring.
+    smooth: float = 0.0
     shading: ShadingConfig = field(default_factory=ShadingConfig)
+    #: Post-render filters, applied in order to the finished frame.
+    postprocess: tuple[PostprocessConfig, ...] = (
+        PostprocessConfig("deband"),
+        PostprocessConfig("unsharp"),
+    )
     background: Path | None = None
     alpha: int = 255
 
@@ -738,12 +846,15 @@ class ImageConfig:
         if isinstance(value, ImageConfig):
             return value
         data = _require_mapping(value, path)
-        _check_keys(data, ["return_type", "return", "smooth", "shading", "background", "alpha"], path)
+        _check_keys(
+            data, ["return_type", "return", "smooth", "shading", "postprocess", "background", "alpha"], path
+        )
         default = cls()
         return_type = data.get("return_type", data.get("return", default.return_type))
         return cls(
             return_type=_as_choice(return_type, cls.RETURN_TYPES, f"{path}.return_type"),
             smooth=_as_float(data.get("smooth", default.smooth), f"{path}.smooth"),
+            postprocess=_parse_postprocess(data.get("postprocess", default.postprocess), f"{path}.postprocess"),
             shading=ShadingConfig.from_dict(data.get("shading", {}), f"{path}.shading"),
             background=_as_path(data.get("background"), f"{path}.background"),
             alpha=_as_int(data.get("alpha", default.alpha), f"{path}.alpha"),
@@ -754,6 +865,7 @@ class ImageConfig:
             "return_type": self.return_type,
             "smooth": self.smooth,
             "shading": self.shading.to_dict(),
+            "postprocess": [step.to_dict() for step in self.postprocess],
             "background": None if self.background is None else str(self.background),
             "alpha": self.alpha,
         }
@@ -794,6 +906,16 @@ class AnimationConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, **dict(self.params)}
+
+
+def _parse_postprocess(value: Any, path: str) -> tuple[PostprocessConfig, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, Mapping)):
+        value = [value]
+    if not isinstance(value, Sequence):
+        raise ConfigError(f"{path}: expected a list of filters")
+    return tuple(PostprocessConfig.from_dict(item, f"{path}[{index}]") for index, item in enumerate(value))
 
 
 @dataclass(frozen=True, slots=True)

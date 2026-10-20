@@ -205,6 +205,73 @@ targets mid-tones (where added light is visible) and never re-normalises, so the
 overall exposure stays flat. `grain` is multi-octave smooth noise that boils
 through correlated key fields: film grain rather than TV static.
 
+## Image import (palette + map modifier)
+
+```bash
+fractalgen from-image photo.jpg --colours 6 --raster-size 96 --strength 1.4 -o out/portrait.png
+fractalgen from-image photo.jpg --raster-only -o out/portrait.png   # just the assets
+```
+
+Three things come out of one picture:
+
+| asset | what it is | how it is used |
+| --- | --- | --- |
+| palette (`*_palette.json`) | dominant colours, dark to light | becomes the colormap (`colour.mode: "colors"`) |
+| raster (`*_raster.png`) | luminance, `--raster-size` square | sampled per pixel as the **map modifier** |
+| trap bitmap | the raster thresholded (Otsu) | orbit trap, so the silhouette also appears in the relief |
+
+The map modifier is what makes the picture readable inside the fractal: each
+pixel's starting luminance scales the Newton damping, so the basin pattern follows
+the image instead of just echoing its outline (a Newton orbit collapses onto a
+root long before it samples much of an orbit trap). The raster is read with
+bilinear interpolation and pre-blurred - a nearest-neighbour lookup stamps the
+raster's own grid into the fractal as square blocks.
+
+Tuning: `fractal.map.strength`
+
+* `0.5-1.0` - the fractal dominates, the image shows as tonal patches and relief;
+* `1.4` (default) - both readable: fractal filaments over the photo's shapes;
+* `> 2` - the image wins; the fractal flattens into flat colour regions.
+
+`fractal.map.mode` selects the coupling: `damping` (default, strong, non-linear)
+or `warp` (displaces the starting point along the image gradient - linear and
+gentle, stays subtle because the fractal is self-similar).
+
+At config level it is just two paths plus the palette:
+
+```jsonc
+"fractal": {
+  "map": {"image": "out/portrait_raster.png", "strength": 1.4, "size": 96},
+  "orbit_trap": {"image": "out/portrait_raster.png", "size": 96, "distance_mode": 1}
+},
+"colour": {"mode": "colors", "colors": ["#0b1024", "#33507a", "#e8d8a0"]}
+```
+
+See `examples/configs/from_image.json`. Library use:
+
+```python
+from fractalgen import Config
+from fractalgen.image_import import analyse_image, config_from_image, write_assets
+
+analysis = analyse_image("photo.jpg", colours=6)
+analysis.colours               # ['#0b1024', '#33507a', ...]
+write_assets(analysis, "out", stem="photo")     # raster + palette json
+config = config_from_image(Config(), "photo.jpg", strength=1.4)
+```
+
+## Post-process filters
+
+`image.postprocess` runs after the frame is rendered, in order. It is what keeps
+the banded look usable:
+
+| filter | parameters (defaults) | purpose |
+| --- | --- | --- |
+| `deband` | `radius` 3, `sigma_color` 14, `sigma_space` 2.5, `passes` 1 | bilateral-style pass that removes the small colour steps of iteration rings while keeping filaments (large steps) |
+| `unsharp` | `radius` 2.0, `amount` 0.35, `threshold` 2 | restores local contrast lost to the de-banding blur |
+
+Defaults are `[deband, unsharp]`. Set `"postprocess": []` for the raw banded look,
+or use `"return_type": "smooth"` for a colouring that has no rings to remove.
+
 ## NFT collections
 
 `nftgen` is a thin layer on top of `fractalgen`; `fractalgen` never imports it.

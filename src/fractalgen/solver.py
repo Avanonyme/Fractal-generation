@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 import os
 from concurrent.futures import ProcessPoolExecutor
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -216,6 +217,7 @@ def _newton(
     polynomial: Polynomial,
     config: FractalConfig,
     trap: OrbitTrap | None,
+    damping: complex | np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     z = np.asarray(start, dtype=np.complex128).ravel().copy()
     iterations = np.full(z.shape, config.iterations + 1, dtype=np.float64)
@@ -224,14 +226,16 @@ def _newton(
     active = np.ones(z.shape, dtype=bool)
     trap_field = trap
     distance = np.full(z.shape, np.inf) if trap_field is not None else None
-    damping = config.damping
 
     for step in range(1, config.iterations + 1):
         index = np.flatnonzero(active)
         if index.size == 0:
             break
         current = z[index]
-        delta, stepped = _newton_step(polynomial, current, damping)
+        # A per-pixel damping array is aligned with the tile, so slice it with the
+        # same active-set index the kernel is iterating over.
+        local_damping = damping[index] if isinstance(damping, np.ndarray) else damping
+        delta, stepped = _newton_step(polynomial, current, local_damping)
         current = current + delta
         z[index] = current
 
@@ -257,6 +261,7 @@ def _halley(
     polynomial: Polynomial,
     config: FractalConfig,
     trap: OrbitTrap | None,
+    damping: complex | np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     z = np.asarray(start, dtype=np.complex128).ravel().copy()
     iterations = np.full(z.shape, config.iterations + 1, dtype=np.float64)
@@ -265,14 +270,14 @@ def _halley(
     active = np.ones(z.shape, dtype=bool)
     trap_field = trap
     distance = np.full(z.shape, np.inf) if trap_field is not None else None
-    damping = config.damping
 
     for step in range(1, config.iterations + 1):
         index = np.flatnonzero(active)
         if index.size == 0:
             break
         current = z[index]
-        delta, stepped = _halley_step(polynomial, current, damping)
+        local_damping = damping[index] if isinstance(damping, np.ndarray) else damping
+        delta, stepped = _halley_step(polynomial, current, local_damping)
         current = current + delta
         z[index] = current
 
@@ -317,9 +322,12 @@ def _smooth_iteration(step: int, residual: np.ndarray, tolerance: float, order: 
 
 
 def _newton_step(
-    polynomial: Polynomial, z: np.ndarray, damping: complex
+    polynomial: Polynomial, z: np.ndarray, damping: complex | np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     """``-damping * f(z) / f'(z)`` plus a mask of the points that moved.
+
+    ``damping`` is a scalar, or one value per point when a map modifier scales it
+    (see :class:`~fractalgen.config.MapConfig`).
 
     A zero derivative used to produce ``inf``/``nan`` pixels that poisoned every
     downstream array (and made tiled and single-tile runs disagree). Points on a
@@ -329,13 +337,14 @@ def _newton_step(
     derivative = polynomial.derivative(z)
     step = np.zeros(z.shape, dtype=np.complex128)
     nonzero = derivative != 0
+    factor = damping[nonzero] if isinstance(damping, np.ndarray) else damping
     with np.errstate(all="ignore"):
-        step[nonzero] = -damping * polynomial(z[nonzero]) / derivative[nonzero]
+        step[nonzero] = -factor * polynomial(z[nonzero]) / derivative[nonzero]
     return step, nonzero
 
 
 def _halley_step(
-    polynomial: Polynomial, z: np.ndarray, damping: complex
+    polynomial: Polynomial, z: np.ndarray, damping: complex | np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     """Halley step with the same zero-denominator protection as Newton."""
     value = polynomial(z)
@@ -344,12 +353,95 @@ def _halley_step(
     denominator = 2 * first**2 - second * value
     step = np.zeros(z.shape, dtype=np.complex128)
     nonzero = denominator != 0
+    factor = damping[nonzero] if isinstance(damping, np.ndarray) else damping
     with np.errstate(all="ignore"):
-        step[nonzero] = -damping * 2 * value[nonzero] * first[nonzero] / denominator[nonzero]
+        step[nonzero] = -factor * 2 * value[nonzero] * first[nonzero] / denominator[nonzero]
     return step, nonzero
 
 
 _KERNELS = {"newton": _newton, "halley": _halley}
+
+
+@lru_cache(maxsize=8)
+def _map_raster(path: str, size: int) -> np.ndarray:
+    """Luminance raster used as a map modifier, cached per (file, size).
+
+    Every worker tile asks for the same file; re-reading and re-resizing the PNG
+    per tile was measurably slower than the iteration itself on small renders.
+    """
+    from PIL import Image
+
+    from scipy import ndimage
+
+    with Image.open(path) as image:
+        luminance = image.convert("L").resize((size, size), Image.Resampling.LANCZOS)
+    values = np.asarray(luminance, dtype=np.float64) / 255.0
+    # A little smoothing keeps the modulation continuous across raster cells.
+    return ndimage.gaussian_filter(values, max(0.8, size / 28), mode="nearest")
+
+
+def _sample_raster(raster: np.ndarray, z: np.ndarray) -> np.ndarray:
+    """Bilinear lookup of ``raster`` at complex points in ``[-1, 1]^2``.
+
+    Bilinear (not nearest) matters: a nearest-neighbour lookup stamps the raster's
+    own grid into the fractal, which reads as square blocks rather than a picture.
+    """
+    from scipy import ndimage
+
+    height, width = raster.shape
+    columns = (np.real(z) + 1) / 2 * (width - 1)
+    rows = (np.imag(z) + 1) / 2 * (height - 1)
+    sampled = ndimage.map_coordinates(
+        raster, [rows.ravel(), columns.ravel()], order=1, mode="nearest"
+    )
+    return np.asarray(sampled).reshape(np.shape(z))
+
+
+def _warped_start(config: FractalConfig, start: np.ndarray) -> np.ndarray:
+    """Displace the starting points along the image gradient.
+
+    ``strength`` is scale-free: 1 means "shift by one raster cell", so the same
+    value works for any resolution or zoom. Displacement is linear in strength, so
+    - unlike modulating the damping - the fractal stays intact while its basin
+    boundaries follow the picture.
+    """
+    from scipy import ndimage
+
+    map_config = config.map
+    if not map_config.enabled or map_config.image is None:
+        return start
+    raster = _map_raster(str(map_config.image), map_config.size)
+    gradient_y, gradient_x = np.gradient(raster)
+    peak = float(np.max(np.hypot(gradient_x, gradient_y)))
+    if peak <= 0:
+        return start
+
+    domain = config.domain
+    grid = np.asarray(start, dtype=np.complex128)
+    columns = (np.real(grid) + 1) / 2 * (map_config.size - 1)
+    rows = (np.imag(grid) + 1) / 2 * (map_config.size - 1)
+    sampled_x = ndimage.map_coordinates(gradient_x, [rows.ravel(), columns.ravel()], order=1, mode="nearest")
+    sampled_y = ndimage.map_coordinates(gradient_y, [rows.ravel(), columns.ravel()], order=1, mode="nearest")
+
+    # One raster cell in plane units.
+    cell = max(domain.width, domain.height) / max(1, map_config.size)
+    displacement = (sampled_x + 1j * sampled_y) / peak * cell * map_config.strength
+    return grid.reshape(-1) + displacement
+
+
+def _pixel_damping(config: FractalConfig, start: np.ndarray) -> complex | np.ndarray:
+    """Damping for the root finder, optionally scaled per pixel by the map image.
+
+    A constant damping produces the usual symmetric basins; letting the map scale
+    it locally deforms them, which is what makes the source image readable inside
+    the fractal (see :class:`~fractalgen.config.MapConfig`).
+    """
+    map_config = config.map
+    if not map_config.enabled or map_config.image is None:
+        return config.damping
+    raster = _map_raster(str(map_config.image), map_config.size)
+    values = _sample_raster(raster, np.asarray(start, dtype=np.complex128))
+    return config.damping * (1.0 + map_config.strength * (values - 0.5))
 
 
 def _nova_start(start: np.ndarray, polynomial: Polynomial, config: FractalConfig) -> tuple[np.ndarray, Polynomial]:
@@ -390,7 +482,12 @@ def _solve_tile(
     origin = np.asarray(start, dtype=np.complex128).reshape(-1)
     if config.variant == "nova":
         start, polynomial = _nova_start(start, polynomial, config)
-    iterations, smooth, roots, distance = kernel(start, polynomial, config, trap)
+    if config.map.mode == "warp":
+        start = _warped_start(config, start)
+        damping = config.damping
+    else:
+        damping = _pixel_damping(config, origin)
+    iterations, smooth, roots, distance = kernel(start, polynomial, config, trap, damping)
 
     # Distance from each pixel to the attractor it reached, measured on the raw
     # values: this is the smooth "basin potential" used for shading, so it must

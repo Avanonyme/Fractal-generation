@@ -36,8 +36,11 @@ class OrbitTrap:
     """Precomputed orbit trap distance field.
 
     ``field`` holds the Euclidean distance of every pixel to the trapped shape,
-    normalised to ``[-1, 1]`` (negative inside the shape), exactly like the
-    original implementation, so downstream visuals stay comparable.
+    scaled to ``[0, 1]`` (0 inside the shape, 1 at the farthest point of the
+    bitmap). The original project reduced it to its sign, which turned every
+    trap render into a two-valued mask; keeping the magnitude makes "how close
+    did the orbit get to the image" the actual field, which is what makes a
+    trapped image readable.
     """
 
     __slots__ = ("field", "mode")
@@ -48,11 +51,22 @@ class OrbitTrap:
 
     @classmethod
     def from_bitmap(cls, bitmap: np.ndarray, mode: int = 1) -> "OrbitTrap":
-        distance = np.asarray(ndimage.distance_transform_edt(np.logical_not(bitmap > 0)), dtype=np.float64)
-        magnitude = cast(np.ndarray, np.abs(distance))
-        with np.errstate(all="ignore"):
-            normalised = np.where(distance == 0, 0.0, distance / magnitude)
-        return cls(normalised, mode)
+        """Build a trap from any bitmap: pixels above its median are "inside".
+
+        Thresholding at the median keeps photographs usable - a photo has no
+        black background, so ``value > 0`` would mark every pixel as inside and
+        produce an empty field.
+        """
+        values = np.asarray(bitmap, dtype=np.float64)
+        if values.size == 0:
+            raise ValueError("orbit trap bitmap is empty")
+        threshold = float(np.median(values))
+        inside = values > threshold
+        if inside.all() or not inside.any():
+            raise ValueError("orbit trap bitmap has no distinguishable shape (all pixels on one side of the median)")
+        distance = np.asarray(ndimage.distance_transform_edt(np.logical_not(inside)), dtype=np.float64)
+        scale = float(distance.max())
+        return cls(distance / scale if scale > 0 else distance, mode)
 
     def sample(self, z: np.ndarray) -> np.ndarray:
         """Distance value for each complex point of ``z`` (flattened output).

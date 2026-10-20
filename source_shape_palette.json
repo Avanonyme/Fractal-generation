@@ -1,0 +1,13 @@
+{
+  "colours": [
+    "#121830",
+    "#1E1E28",
+    "#5AC8F0",
+    "#EBDC78"
+  ],
+  "source": {
+    "width": 320,
+    "height": 320
+  },
+  "raster": "source_shape_raster.png"
+}
