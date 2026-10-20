@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fractal-generation"
+version = "2.0.0"
+description = "Root-finding fractal renderer (Newton/Halley + RFA variants), with image, animation and NFT batch front-ends"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Avanonyme" }]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pillow>=10.0",
+    "matplotlib>=3.7",
+    "imageio>=2.31",
+]
+
+[project.optional-dependencies]
+# Palette extraction / perceptual palette work (colour.mode = "image"/"accents").
+palette = ["scikit-image>=0.21", "seaborn>=0.12", "extcolors>=1.2", "colorspacious>=1.1"]
+# Canny edge detector (falls back to a scipy Sobel detector when absent).
+edges = ["scikit-image>=0.21"]
+video = ["imageio-ffmpeg>=0.4"]
+dev = ["pytest>=8.0", "scikit-image>=0.21", "seaborn>=0.12", "extcolors>=1.2", "colorspacious>=1.1"]
+
+[project.scripts]
+fractalgen = "fractalgen.cli:main"
+nftgen = "nftgen.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fractalgen", "src/nftgen"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

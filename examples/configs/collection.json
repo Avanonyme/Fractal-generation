@@ -1,0 +1,19 @@
+{
+  "collection": {
+    "name": "Roots",
+    "description": "Newton fractals from random polynomials.",
+    "size": 4,
+    "start_index": 1,
+    "seed": 2024
+  },
+  "output": {"directory": "out/collection", "metadata": true},
+  "composition": {"background": null, "scale": [0.45, 0.8], "rotation": [-10, 10], "flip": true, "offset": [0, 0]},
+  "fractal": {
+    "size": 700,
+    "iterations": 30,
+    "polynomial": {"mode": "random", "max_degree": 6}
+  },
+  "colour": {"mode": "matplotlib", "name": "inferno"},
+  "image": {"return_type": "iteration", "shading": {"type": "matplotlib"}},
+  "runtime": {"workers": 0}
+}

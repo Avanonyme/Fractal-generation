@@ -1,0 +1,22 @@
+{
+  "form": "image",
+  "output": "out/nebula.png",
+  "fractal": {
+    "size": 1200,
+    "method": "newton",
+    "variant": "standard",
+    "iterations": 40,
+    "tolerance": 1e-05,
+    "damping": [1.0, 0.0],
+    "round_digits": 4,
+    "domain": {"x": [-1.0, 1.0], "y": [-1.0, 1.0]},
+    "polynomial": {"mode": "random", "max_degree": 6, "seed": 7, "min_area": 0.1, "max_area": 0.6},
+    "orbit_trap": {"image": null, "size": 800, "distance_mode": 1}
+  },
+  "colour": {"mode": "matplotlib", "name": "viridis", "n_colors": 256},
+  "image": {
+    "return_type": "iteration",
+    "shading": {"type": "matplotlib", "azimuth": 315, "elevation": 20, "vertical_exaggeration": 1.5, "fraction": 1.2}
+  },
+  "runtime": {"workers": 0, "verbose": false}
+}

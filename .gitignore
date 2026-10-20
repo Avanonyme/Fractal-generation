@@ -1,7 +1,9 @@
-*.gif
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.DS_Store
+out/
 images/
-*.png
-test.py
-orbit/
-test/
-
+*.gif
+*.mp4

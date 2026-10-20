@@ -1,0 +1,19 @@
+{
+  "form": "video",
+  "output": "out/zoom.gif",
+  "fractal": {
+    "size": 600,
+    "iterations": 40,
+    "tolerance": 1e-06,
+    "auto_iterations": true,
+    "polynomial": {"mode": "roots", "roots": [[1, 0], [-1, 0], [0, 1], [0, -1]]}
+  },
+  "colour": {"mode": "colors", "colors": ["#0b0033", "#3b0a63", "#c8326b", "#ffd166"]},
+  "image": {"return_type": "iteration", "shading": {"type": "matplotlib"}},
+  "video": {
+    "fps": 15,
+    "duration": 4,
+    "animations": [{"name": "zoom", "zoom_factor": 1.35, "oversample": 2}]
+  },
+  "runtime": {"workers": 0}
+}

@@ -1,0 +1,25 @@
+{
+  "form": "video",
+  "output": "out/nebula.gif",
+  "fractal": {
+    "size": 700,
+    "method": "newton",
+    "variant": "standard",
+    "iterations": 30,
+    "damping": [1.0, 0.0],
+    "polynomial": {"mode": "random", "max_degree": 5, "seed": 21}
+  },
+  "colour": {"mode": "matplotlib", "name": "magma"},
+  "image": {"return_type": "iteration", "shading": {"type": "blinn-phong", "azimuth": 135, "elevation": 35}},
+  "video": {
+    "fps": 20,
+    "duration": 3,
+    "codec": "gif",
+    "animations": [
+      {"name": "alpha"},
+      {"name": "pulse", "oscillation_amplitude": 6, "oscillation_frequency": 0.06},
+      {"name": "flicker", "percentage": 0.004, "amplitude": 1.5, "on_fractal": true}
+    ]
+  },
+  "runtime": {"workers": 0}
+}
