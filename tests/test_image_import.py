@@ -298,3 +298,54 @@ def test_trap_mask_separates_shape_from_colour(tmp_path: Path):
     rgb = render_image(config).rgb
     # the trap colour comes from the picture: red dominates
     assert rgb[..., 0].mean() > rgb[..., 2].mean()
+
+
+def test_subject_only_keeps_the_picture_outside_the_mask(tmp_path: Path):
+    """return_type=image + subject_only: fractal inside the subject, photo outside."""
+    from fractalgen import Config, render_image
+
+    # a bright square on a dark field: the colour-cluster matte should find it
+    size = 96
+    picture = np.zeros((size, size, 3), dtype=np.uint8)
+    picture[..., 2] = 20
+    picture[24:72, 24:72] = (240, 200, 60)
+    path = tmp_path / "subject.png"
+    Image.fromarray(picture).save(path)
+
+    config = Config.from_dict(
+        {
+            "fractal": {
+                "size": 96,
+                "iterations": 30,
+                "polynomial": {"mode": "roots", "roots": [[1, 0], [-1, 0], [0, 1], [0, -1]]},
+                "map": {"image": str(path), "size": 48, "blend": 0.0},
+            },
+            "image": {
+                "return_type": "image",
+                "subject": {"method": "segment", "feather": 0.5},
+                "subject_only": True,
+                "shading": {"type": "none"},
+            },
+        },
+        base_dir=tmp_path,
+    )
+    rendered = render_image(config).rgb.astype(float)
+    source = np.asarray(Image.open(path).convert("RGB"), dtype=float)
+
+    # a corner is background: it must be (almost) the untouched picture
+    corner = np.abs(rendered[:8, :8] - source[:8, :8]).mean()
+    assert corner < 6.0
+    # the middle is the subject: the fractal has changed it
+    centre = np.abs(rendered[40:56, 40:56] - source[40:56, 40:56]).mean()
+    assert centre > 8.0
+
+
+def test_subject_methods_are_exposed_in_the_ui_schema():
+    from fractalgen.ui import build_schema
+
+    fields = {field["path"]: field for field in build_schema()["fields"]}
+    method = fields["image.subject.method"]
+    assert method["kind"] == "enum"
+    modes = [choice[0] for choice in method["choices"]]
+    assert "segment" in modes and "auto" in modes
+    assert fields["image.subject_only"]["kind"] == "bool"

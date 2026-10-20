@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import sys
+from functools import lru_cache
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -102,7 +103,15 @@ def build_frame(
         # small part of the plane, so the picture never appears.
         structure = render.normalise(smooth_field(fractal.scalar_field("iteration"), 1.0))
         source = _source_image(config, structure.shape[0])
-        rgb = render.to_uint8(source * (0.3 + 0.7 * structure)[..., None])
+        textured = source * (0.3 + 0.7 * structure)[..., None]
+        if image_config.subject_only:
+            mask = _subject_mask(config, structure.shape[0])
+            if mask is not None:
+                # Inside the subject: the picture made of fractal. Outside: the
+                # picture untouched, so the subject's own shape comes through.
+                weight = mask[..., None]
+                textured = textured * weight + source * (1.0 - weight)
+        rgb = render.to_uint8(np.clip(textured, 0, 255))
     else:
         field = fractal.scalar_field(image_config.return_type)
         if image_config.smooth > 0 and image_config.return_type in ("iteration", "roots"):
@@ -164,6 +173,25 @@ def render_image(config: Config, polynomial=None) -> RenderedImage:
     if target is not None:
         rendered.save(target)
     return rendered
+
+
+@lru_cache(maxsize=8)
+def _subject_mask_cached(path: str, size: int, subject) -> np.ndarray:  # noqa: ANN001 - frozen dataclass key
+    from .subject import matte
+
+    picture = render.load(Path(path))
+    return matte(picture[..., :3], size, subject)
+
+
+def _subject_mask(config: Config, size: int) -> np.ndarray | None:
+    """Soft subject mask for the render's own size (cached per picture/config)."""
+    source = config.fractal.map.image or config.fractal.orbit_trap.image
+    path = config.resolve_path(source)
+    if path is None or not path.is_file():
+        return None
+    if config.image.subject.method == "none":
+        return None
+    return _subject_mask_cached(str(path), size, config.image.subject)
 
 
 def _source_image(config: Config, size: int) -> np.ndarray:

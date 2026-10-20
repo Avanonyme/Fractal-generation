@@ -880,8 +880,20 @@ class SubjectConfig:
     edge_sigma: float = 1.6
     low_threshold: float = 0.05
     high_threshold: float = 0.15
+    #: Number of colour clusters the ``segment`` method considers.
+    clusters: int = 5
 
-    METHODS = ("auto", "edges", "silhouette", "focus", "grabcut", "rect", "threshold", "none")
+    METHODS = (
+        "auto",
+        "segment",
+        "edges",
+        "silhouette",
+        "focus",
+        "grabcut",
+        "rect",
+        "threshold",
+        "none",
+    )
 
     def __post_init__(self) -> None:
         if self.method not in self.METHODS:
@@ -915,6 +927,7 @@ class SubjectConfig:
             "edge_sigma",
             "low_threshold",
             "high_threshold",
+            "clusters",
         }
         unknown = sorted(set(value) - allowed)
         if unknown:
@@ -940,6 +953,7 @@ class SubjectConfig:
             edge_sigma=_as_float(value.get("edge_sigma", 1.6), f"{path}.edge_sigma"),
             low_threshold=_as_float(value.get("low_threshold", 0.05), f"{path}.low_threshold"),
             high_threshold=_as_float(value.get("high_threshold", 0.15), f"{path}.high_threshold"),
+            clusters=_as_int(value.get("clusters", 5), f"{path}.clusters", minimum=2),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -953,6 +967,7 @@ class SubjectConfig:
             "edge_sigma": self.edge_sigma,
             "low_threshold": self.low_threshold,
             "high_threshold": self.high_threshold,
+            "clusters": self.clusters,
         }
 
 
@@ -973,6 +988,10 @@ class ImageConfig:
     trap_mix: float = 0.7
     #: What counts as the subject when the picture drives a trap.
     subject: SubjectConfig = field(default_factory=SubjectConfig)
+    #: With ``return_type: image``: render the fractal only inside the subject
+    #: mask and keep the untouched picture elsewhere (the picture's own shape,
+    #: made of fractal texture).
+    subject_only: bool = True
     #: Post-render filters, applied in order to the finished frame.
     postprocess: tuple[PostprocessConfig, ...] = (
         PostprocessConfig("deband"),
@@ -1015,6 +1034,7 @@ class ImageConfig:
                 "trap_mix",
                 "shading",
                 "subject",
+                "subject_only",
                 "postprocess",
                 "background",
                 "alpha",
@@ -1028,6 +1048,7 @@ class ImageConfig:
             smooth=_as_float(data.get("smooth", default.smooth), f"{path}.smooth"),
             trap_mix=_as_float(data.get("trap_mix", default.trap_mix), f"{path}.trap_mix"),
             subject=SubjectConfig.from_dict(data.get("subject", default.subject), f"{path}.subject"),
+            subject_only=_as_bool(data.get("subject_only", default.subject_only), f"{path}.subject_only"),
             postprocess=_parse_postprocess(data.get("postprocess", default.postprocess), f"{path}.postprocess"),
             shading=ShadingConfig.from_dict(data.get("shading", {}), f"{path}.shading"),
             background=_as_path(data.get("background"), f"{path}.background"),
@@ -1040,6 +1061,7 @@ class ImageConfig:
             "smooth": self.smooth,
             "trap_mix": self.trap_mix,
             "subject": self.subject.to_dict(),
+            "subject_only": self.subject_only,
             "shading": self.shading.to_dict(),
             "postprocess": [step.to_dict() for step in self.postprocess],
             "background": None if self.background is None else str(self.background),

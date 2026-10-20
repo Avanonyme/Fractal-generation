@@ -90,6 +90,54 @@ def _focus_matte(luma: np.ndarray, config: SubjectConfig) -> np.ndarray:
     return np.asarray(ndimage.binary_fill_holes(score >= threshold), dtype=bool)
 
 
+def _segment_matte(rgb: np.ndarray, config: SubjectConfig) -> np.ndarray:
+    """Centre-weighted colour clustering: the simplest thing that finds a subject.
+
+    A painterly picture has no tonal silhouette, but it usually has a coherent
+    *colour* for the subject (the ochre derrick against teal foliage). k-means over
+    the colours, then pick the cluster that sits in the middle and covers a
+    plausible share of the frame. Deterministic (quantile-initialised, fixed
+    iteration count) and ~50 ms at 160 px.
+    """
+    size = rgb.shape[0]
+    feature = np.asarray(ndimage.gaussian_filter(rgb / 255.0, (1.5, 1.5, 0)), dtype=np.float64)
+    pixels = feature.reshape(-1, 3)
+    luma = feature @ np.array([0.299, 0.587, 0.114])
+
+    count = max(2, min(int(config.clusters), 12))
+    order = np.argsort(luma.reshape(-1))
+    centres = pixels[order[np.linspace(0, order.size - 1, count).round().astype(int)]].copy()
+    labels = np.zeros(pixels.shape[0], dtype=np.int64)
+    for _ in range(20):
+        distance = ((pixels[:, None, :] - centres[None, :, :]) ** 2).sum(axis=2)
+        labels = np.argmin(distance, axis=1)
+        for index in range(count):
+            members = pixels[labels == index]
+            if len(members):
+                centres[index] = members.mean(axis=0)
+
+    grid = np.mgrid[0:size, 0:size] / max(1, size - 1)
+    centre_y, centre_x = grid
+    prior = np.exp(-(((centre_x - 0.5) ** 2 + (centre_y - 0.58) ** 2) / (2 * 0.30**2)))
+
+    best_index, best_score = 0, -1.0
+    for index in range(count):
+        blob = (labels == index).reshape(size, size)
+        share = float(blob.mean())
+        if share < 0.01:
+            continue
+        centre_mass = float((blob * prior).sum() / max(blob.sum(), 1))
+        # Prefer a subject-sized region (~25 % of the frame) over a huge or tiny one.
+        size_score = float(np.exp(-((np.log(max(share, 1e-3) / 0.25)) ** 2) / 2))
+        score = centre_mass * size_score
+        if score > best_score:
+            best_index, best_score = index, score
+
+    mask = (labels == best_index).reshape(size, size)
+    closed = ndimage.binary_closing(ndimage.binary_dilation(mask, iterations=1), structure=np.ones((5, 5)))
+    return np.asarray(ndimage.binary_fill_holes(closed), dtype=bool)
+
+
 def _grabcut_matte(rgb: np.ndarray, config: SubjectConfig) -> np.ndarray:
     optional.require("cv2")
     import cv2
@@ -157,6 +205,8 @@ def matte(
         return _threshold_free_rect(size, config)
     if config.method == "threshold":
         binary = _threshold_matte(luma)
+    elif config.method == "segment":
+        binary = _segment_matte(small, config)
     elif config.method == "edges":
         binary = _canny(luma, config)
     elif config.method == "focus":
@@ -170,11 +220,17 @@ def matte(
         binary = _silhouette_matte(luma, config)
 
     if config.method == "auto":
+        # Colour clustering is the cheapest thing that finds a subject on a
+        # photograph, so try it first and keep the edge-based answers as fallbacks.
+        candidate = _segment_matte(small, config)
+        share = float(candidate.mean())
+        if 0.05 <= share <= 0.60:
+            binary = candidate
         coverage = float(np.mean(binary)) if binary.size else 0.0
         # A silhouette that covers almost nothing (or almost everything) means the
         # edge map did not close into a region: a textured picture. Fall back to
         # the busy-and-centred region instead of pretending we found a shape.
-        if coverage < 0.02 or coverage > 0.60:
+        if not 0.02 <= coverage <= 0.60:
             binary = _focus_matte(luma, config)
 
     if config.keep_largest and config.method != "edges":

@@ -307,6 +307,16 @@ marks 86 % of it. `fractalgen.subject` builds a matte instead:
 | `threshold` | Otsu on the luminance (flat graphics) |
 | `none` | the whole frame |
 
+`segment` (part of `auto`) is the workhorse for photographs: k-means over the
+colours, then keep the cluster that sits near the middle and covers a plausible
+share of the frame. On a painterly forest scene it isolates the subject's ochre
+mass (28 % of the frame) where every threshold and edge method failed.
+
+With `return_type: "image"` and `image.subject_only: true` (default) the matte is
+used as an alpha: the subject is rendered as fractal texture in its own colours
+and the rest of the frame stays the untouched picture - the picture's shape, made
+of fractal.
+
 The matte is written next to the render as `<name>_mask.png`, so a bad matte is
 visible and can be hand-edited; `orbit_trap.mask` then keeps that silhouette while
 `orbit_trap.image` still supplies the colours (`--subject`, `--subject-rect` from
