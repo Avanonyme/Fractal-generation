@@ -200,3 +200,34 @@ def test_cli_missing_source_is_reported(tmp_path: Path, capsys):
 
     assert main(["from-image", str(tmp_path / "nope")]) == 2
     assert "no such file or directory" in capsys.readouterr().err
+
+
+def test_return_type_image_uses_the_source_picture(tmp_path: Path):
+    """`return_type: image` must reproduce the source colours, textured by the fractal."""
+    from fractalgen.config import ImageConfig
+
+    source = _photo(tmp_path / "photo.png")
+    base = _base_config(tmp_path)
+    config = config_from_image(base, source, colours=4, raster_size=48, strength=0.0, blend=0.0)
+    config = Config.from_dict(
+        {**config.to_dict(), "image": {**config.image.to_dict(), "return_type": "image"}}, base_dir=tmp_path
+    )
+    assert config.image.return_type in ImageConfig.RETURN_TYPES
+
+    rendered = render_image(config).rgb.astype(float)
+    picture = np.asarray(Image.open(config.fractal.map.image).convert("RGB").resize((96, 96)), dtype=float)
+    rendered_small = np.asarray(Image.fromarray(rendered.astype(np.uint8)).resize((96, 96)), dtype=float)
+    a = (rendered_small - rendered_small.mean()) / (rendered_small.std() or 1.0)
+    b = (picture - picture.mean()) / (picture.std() or 1.0)
+    assert float((a * b).mean()) > 0.6
+
+
+def test_return_type_image_without_a_source_is_reported(tmp_path: Path):
+    from fractalgen import render_image
+
+    config = _base_config(tmp_path)
+    config = Config.from_dict(
+        {**config.to_dict(), "image": {**config.image.to_dict(), "return_type": "image"}}, base_dir=tmp_path
+    )
+    with pytest.raises(ValueError, match="needs a source picture"):
+        render_image(config)

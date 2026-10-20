@@ -843,7 +843,16 @@ class ImageConfig:
     background: Path | None = None
     alpha: int = 255
 
-    RETURN_TYPES = ("smooth", "iteration", "iteration-steps", "root", "distance", "boundary", "roots")
+    RETURN_TYPES = (
+        "smooth",
+        "iteration",
+        "iteration-steps",
+        "root",
+        "distance",
+        "boundary",
+        "roots",
+        "image",
+    )
 
     def __post_init__(self) -> None:
         if not 0 <= self.alpha <= 255:

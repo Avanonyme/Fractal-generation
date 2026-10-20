@@ -178,6 +178,7 @@ _CHOICE_LABELS: dict[str, dict[str, str]] = {
         "roots": "Distance to root (smooth gradient)",
         "distance": "Orbit-trap distance",
         "boundary": "Fractal boundary mask",
+        "image": "Source image colours + fractal structure",
     },
     "image.shading.type": {
         "matplotlib": "Hillshade (LightSource)",

@@ -138,9 +138,10 @@ field has a default, and `fractalgen schema` prints the whole model. Input paths
 * **`orbit_trap`** — a bitmap whose distance field is injected during iteration;
   enables the `distance` render type and true orbit normals.
 * **`return_type`** chooses the *colour* field: `smooth` (basin hue plus a small
-  inner gradient, the default), `iteration` (continuous count), `iteration-steps`
-  (raw counter), `root` (flat basin identity), `roots` (log distance to the
-  attractor), `distance` (orbit trap), `boundary`.
+  inner gradient), `iteration` (continuous count), `iteration-steps` (raw
+  counter), `root` (flat basin identity), `roots` (log distance to the
+  attractor), `distance` (orbit trap), `boundary`, `image` (the source picture's
+  colours with the fractal as its texture - see *Image import*).
 * **`shading.type`** — `matplotlib`, `fossil`, `blinn-phong` or `none`. Lighting
   is a separate layer: the colour comes from `return_type`, the relief only
   multiplies it (Ultra Fractal's "slope + lighting" split).
@@ -257,6 +258,12 @@ Three things come out of one picture:
 | palette (`*_palette.json`) | dominant colours, dark to light | becomes the colormap (`colour.mode: "colors"`) |
 | raster (`*_raster.png`) | luminance, `--raster-size` square | sampled per pixel as the **map modifier** |
 | trap bitmap | the raster thresholded (Otsu) | orbit trap, so the silhouette also appears in the relief |
+
+**An orbit trap does not reproduce a picture.** It records how close an orbit came
+to the trapped shape, and a converging Newton orbit visits only a small part of
+the plane, so a trapped tree shows up as a few bands, not a tree. To see the
+picture, use `fractal.map.blend` (image-space multiply) or
+`image.return_type: "image"` (the picture's colours, the fractal as texture).
 
 Orbit traps sample the *render domain* (not a hard-coded `[-1, 1]²`, which used to
 clamp every zoomed orbit to the border), index `[row=imag, col=real]` (they used

@@ -78,10 +78,19 @@ def build_frame(
     which the zoom animation uses so brightness does not drift between frames.
     """
     image_config = config.image
-    field = fractal.scalar_field(image_config.return_type)
-    if image_config.smooth > 0 and image_config.return_type in ("iteration", "roots"):
-        field = smooth_field(field, image_config.smooth)
-    rgb = render.colorize(field, cmap, value_range)
+    if image_config.return_type == "image":
+        # The source image supplies the colour, the fractal supplies the
+        # structure. An orbit trap alone cannot do this: it reports how close an
+        # orbit came to the shape, and a converging Newton orbit only visits a
+        # small part of the plane, so the picture never appears.
+        structure = render.normalise(smooth_field(fractal.scalar_field("iteration"), 1.0))
+        source = _source_image(config, structure.shape[0])
+        rgb = render.to_uint8(source * (0.3 + 0.7 * structure)[..., None])
+    else:
+        field = fractal.scalar_field(image_config.return_type)
+        if image_config.smooth > 0 and image_config.return_type in ("iteration", "roots"):
+            field = smooth_field(field, image_config.smooth)
+        rgb = render.colorize(field, cmap, value_range)
 
     shading_config = image_config.shading
     if shading_config.enabled:
@@ -138,6 +147,21 @@ def render_image(config: Config, polynomial=None) -> RenderedImage:
     if target is not None:
         rendered.save(target)
     return rendered
+
+
+def _source_image(config: Config, size: int) -> np.ndarray:
+    """The image a render borrows its colours from (map image, else trap image)."""
+    candidates = [config.fractal.map.image, config.fractal.orbit_trap.image]
+    for candidate in candidates:
+        path = config.resolve_path(candidate)
+        if path is not None and path.is_file():
+            picture = render.load(path)
+            if picture.shape[0] != size:
+                picture = render.resize(picture, size)
+            return np.asarray(picture[..., :3], dtype=np.float64)
+    raise ValueError(
+        "return_type 'image' needs a source picture: set fractal.map.image or fractal.orbit_trap.image"
+    )
 
 
 def _background(config: Config, size: int | None = None) -> np.ndarray | None:
