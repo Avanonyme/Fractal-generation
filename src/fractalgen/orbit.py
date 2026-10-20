@@ -221,7 +221,12 @@ def load_orbit_trap(config: OrbitTrapConfig, base_dir: Path) -> OrbitTrap | None
     path = config.image if config.image.is_absolute() else Path(base_dir) / config.image
     if not path.exists():
         raise FileNotFoundError(f"orbit trap image not found: {path}")
-    bitmap = _read_bitmap(path, config.size)
+    shape_path = path
+    if config.mask is not None:
+        shape_path = config.mask if config.mask.is_absolute() else Path(base_dir) / config.mask
+        if not shape_path.exists():
+            raise FileNotFoundError(f"orbit trap mask not found: {shape_path}")
+    bitmap = _read_bitmap(shape_path, config.size)
     return OrbitTrap.from_bitmap(
         bitmap,
         config.distance_mode,

@@ -292,6 +292,27 @@ turn the frame into wallpaper.
 If the picture must sit in the frame *as drawn*, use `fractal.map.blend` or
 `image.return_type: "image"` (picture colours, fractal as texture) instead.
 
+**Subject masks.** A bitmap trap needs a silhouette, and a photograph is not one:
+thresholding `atrest.jpg` at its median marks half the frame, filling its edge map
+marks 86 % of it. `fractalgen.subject` builds a matte instead:
+
+| `image.subject.method` | what it gives |
+| --- | --- |
+| `auto` (default) | silhouette if the edges close into a region, else the busy-centred region |
+| `edges` | the Canny map itself (thin outlines - good structure for a trap) |
+| `silhouette` | edges -> close -> fill -> largest blob |
+| `focus` | centre-weighted edge density ("the busy area in the middle") |
+| `grabcut` | OpenCV GrabCut from a centred rectangle |
+| `rect` | an explicit rectangle: `image.subject.rect: [x0, y0, x1, y1]`, fractions |
+| `threshold` | Otsu on the luminance (flat graphics) |
+| `none` | the whole frame |
+
+The matte is written next to the render as `<name>_mask.png`, so a bad matte is
+visible and can be hand-edited; `orbit_trap.mask` then keeps that silhouette while
+`orbit_trap.image` still supplies the colours (`--subject`, `--subject-rect` from
+the CLI). For a compositional picture the honest answer is `rect` or a hand-drawn
+mask - no low-level detector knows which part of a forest is "the subject".
+
 Orbit traps sample the *render domain* (not a hard-coded `[-1, 1]²`, which used to
 clamp every zoomed orbit to the border), index `[row=imag, col=real]` (they used
 to be transposed), interpolate bilinearly, and are seeded with the pixel's own

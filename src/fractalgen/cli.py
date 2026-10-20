@@ -69,6 +69,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="colour field: image (blend), trap (orbit-trap colouring), iteration, smooth, ...",
     )
+    from_image.add_argument(
+        "--subject",
+        default="auto",
+        choices=("auto", "edges", "silhouette", "focus", "grabcut", "rect", "threshold", "none"),
+        help="how to decide what the picture's subject is (trap shape)",
+    )
+    from_image.add_argument(
+        "--subject-rect",
+        default=None,
+        metavar="x0,y0,x1,y1",
+        help="explicit subject rectangle in 0..1 fractions (needed for --subject rect)",
+    )
     from_image.add_argument("--raster-only", action="store_true", help="write the assets, skip the render")
     from_image.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="config override")
     from_image.add_argument("-w", "--workers", type=int, help="worker processes (0 = all cores)")
@@ -91,6 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
+    if getattr(arguments, "subject_rect", None):
+        raw = [float(part) for part in str(arguments.subject_rect).split(",")]
+        if len(raw) != 4:
+            raise ConfigError("--subject-rect expects x0,y0,x1,y1")
+        arguments.subject_rect = tuple(raw)
 
     try:
         if arguments.command == "schema":
@@ -159,6 +176,12 @@ def _render_from_image(arguments: argparse.Namespace) -> int:
     return exit_code
 
 
+def _subject_config(arguments: argparse.Namespace):
+    from .config import SubjectConfig
+
+    return SubjectConfig(method=arguments.subject, rect=arguments.subject_rect)
+
+
 def _collect_images(source: Path) -> list[Path]:
     from .image_import import IMAGE_SUFFIXES
 
@@ -197,6 +220,7 @@ def _render_one_image(arguments: argparse.Namespace, base: Config, image: Path, 
         blend=arguments.blend,
         return_type=arguments.return_type,
         trap_scale=arguments.trap_scale,
+        subject=_subject_config(arguments),
         output=target,
         stem=image.stem,
     )

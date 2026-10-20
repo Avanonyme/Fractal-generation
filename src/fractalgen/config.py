@@ -373,6 +373,10 @@ class OrbitTrapConfig:
     """
 
     image: Path | None = None
+    #: Optional silhouette used for the *shape* of the trap while ``image`` still
+    #: supplies the colours (see :mod:`fractalgen.subject`). A photograph is not a
+    #: silhouettes; a matte is.
+    mask: Path | None = None
     size: int = 800
     distance_mode: int = 1
     #: How the trap image colours a pixel (see ``render_type: trap``):
@@ -413,11 +417,14 @@ class OrbitTrapConfig:
             return value
         data = _require_mapping(value, path)
         _check_keys(
-            data, ["image", "size", "distance_mode", "colour_mode", "scale", "offset", "wrap"], path
+            data,
+            ["image", "mask", "size", "distance_mode", "colour_mode", "scale", "offset", "wrap"],
+            path,
         )
         default = cls()
         return cls(
             image=_as_path(data.get("image"), f"{path}.image"),
+            mask=_as_path(data.get("mask"), f"{path}.mask"),
             size=_as_int(data.get("size", default.size), f"{path}.size", minimum=16),
             distance_mode=_as_int(data.get("distance_mode", default.distance_mode), f"{path}.distance_mode"),
             colour_mode=_as_choice(data.get("colour_mode", default.colour_mode), cls.COLOUR_MODES, f"{path}.colour_mode"),
@@ -429,6 +436,7 @@ class OrbitTrapConfig:
     def to_dict(self) -> dict[str, Any]:
         return {
             "image": None if self.image is None else str(self.image),
+            "mask": None if self.mask is None else str(self.mask),
             "size": self.size,
             "distance_mode": self.distance_mode,
             "colour_mode": self.colour_mode,
@@ -860,6 +868,95 @@ class PostprocessConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SubjectConfig:
+    """How to decide what the subject of a picture is."""
+
+    method: str = "auto"
+    rect: tuple[float, float, float, float] | None = None
+    expand: int = 1
+    feather: float = 2.0
+    invert: bool = False
+    keep_largest: bool = True
+    edge_sigma: float = 1.6
+    low_threshold: float = 0.05
+    high_threshold: float = 0.15
+
+    METHODS = ("auto", "edges", "silhouette", "focus", "grabcut", "rect", "threshold", "none")
+
+    def __post_init__(self) -> None:
+        if self.method not in self.METHODS:
+            raise ConfigError(f"image.subject.method: expected one of {list(self.METHODS)}, got {self.method!r}")
+        if self.method == "rect" and self.rect is None:
+            raise ConfigError("image.subject.rect: required when method = 'rect'")
+        if self.rect is not None:
+            x0, y0, x1, y1 = self.rect
+            if not (0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0):
+                raise ConfigError("image.subject.rect: expected [x0, y0, x1, y1] with 0 <= x0 < x1 <= 1")
+        if self.expand < 0:
+            raise ConfigError("image.subject.expand: must be >= 0")
+        if self.feather < 0:
+            raise ConfigError("image.subject.feather: must be >= 0")
+
+    @classmethod
+    def from_dict(cls, value: Any, path: str = "image.subject") -> "SubjectConfig":
+        if isinstance(value, SubjectConfig):
+            return value
+        if value is None:
+            return cls()
+        if not isinstance(value, Mapping):
+            raise ConfigError(f"{path}: expected an object, got {type(value).__name__}")
+        allowed = {
+            "method",
+            "rect",
+            "expand",
+            "feather",
+            "invert",
+            "keep_largest",
+            "edge_sigma",
+            "low_threshold",
+            "high_threshold",
+        }
+        unknown = sorted(set(value) - allowed)
+        if unknown:
+            raise ConfigError(f"{path}: unknown key(s) {unknown}; allowed: {sorted(allowed)}")
+
+        method = str(value.get("method", "auto")).lower()
+        if method not in cls.METHODS:
+            raise ConfigError(f"{path}.method: expected one of {list(cls.METHODS)}, got {method!r}")
+        raw_rect = value.get("rect")
+        rect = None
+        if raw_rect is not None:
+            if not isinstance(raw_rect, (list, tuple)) or len(raw_rect) != 4:
+                raise ConfigError(f"{path}.rect: expected [x0, y0, x1, y1]")
+            values = [_as_float(item, f"{path}.rect") for item in raw_rect]
+            rect = (values[0], values[1], values[2], values[3])
+        return cls(
+            method=method,
+            rect=rect,
+            expand=_as_int(value.get("expand", 1), f"{path}.expand"),
+            feather=_as_float(value.get("feather", 2.0), f"{path}.feather"),
+            invert=bool(value.get("invert", False)),
+            keep_largest=bool(value.get("keep_largest", True)),
+            edge_sigma=_as_float(value.get("edge_sigma", 1.6), f"{path}.edge_sigma"),
+            low_threshold=_as_float(value.get("low_threshold", 0.05), f"{path}.low_threshold"),
+            high_threshold=_as_float(value.get("high_threshold", 0.15), f"{path}.high_threshold"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "method": self.method,
+            "rect": None if self.rect is None else list(self.rect),
+            "expand": self.expand,
+            "feather": self.feather,
+            "invert": self.invert,
+            "keep_largest": self.keep_largest,
+            "edge_sigma": self.edge_sigma,
+            "low_threshold": self.low_threshold,
+            "high_threshold": self.high_threshold,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ImageConfig:
     """What a single rendered frame contains."""
 
@@ -874,6 +971,8 @@ class ImageConfig:
     #: the trap image (1 = trap only, 0 = fractal only). Lower values fade the
     #: streaks that bitmap traps leave along the orbit paths.
     trap_mix: float = 0.7
+    #: What counts as the subject when the picture drives a trap.
+    subject: SubjectConfig = field(default_factory=SubjectConfig)
     #: Post-render filters, applied in order to the finished frame.
     postprocess: tuple[PostprocessConfig, ...] = (
         PostprocessConfig("deband"),
@@ -909,7 +1008,17 @@ class ImageConfig:
         data = _require_mapping(value, path)
         _check_keys(
             data,
-            ["return_type", "return", "smooth", "trap_mix", "shading", "postprocess", "background", "alpha"],
+            [
+                "return_type",
+                "return",
+                "smooth",
+                "trap_mix",
+                "shading",
+                "subject",
+                "postprocess",
+                "background",
+                "alpha",
+            ],
             path,
         )
         default = cls()
@@ -918,6 +1027,7 @@ class ImageConfig:
             return_type=_as_choice(return_type, cls.RETURN_TYPES, f"{path}.return_type"),
             smooth=_as_float(data.get("smooth", default.smooth), f"{path}.smooth"),
             trap_mix=_as_float(data.get("trap_mix", default.trap_mix), f"{path}.trap_mix"),
+            subject=SubjectConfig.from_dict(data.get("subject", default.subject), f"{path}.subject"),
             postprocess=_parse_postprocess(data.get("postprocess", default.postprocess), f"{path}.postprocess"),
             shading=ShadingConfig.from_dict(data.get("shading", {}), f"{path}.shading"),
             background=_as_path(data.get("background"), f"{path}.background"),
@@ -929,6 +1039,7 @@ class ImageConfig:
             "return_type": self.return_type,
             "smooth": self.smooth,
             "trap_mix": self.trap_mix,
+            "subject": self.subject.to_dict(),
             "shading": self.shading.to_dict(),
             "postprocess": [step.to_dict() for step in self.postprocess],
             "background": None if self.background is None else str(self.background),

@@ -233,3 +233,68 @@ def test_return_type_image_without_a_source_is_reported(tmp_path: Path):
     )
     with pytest.raises(ValueError, match="needs a source picture"):
         render_image(config)
+
+
+def test_subject_matte_methods(tmp_path: Path):
+    from fractalgen.config import SubjectConfig
+    from fractalgen.subject import matte
+
+    source = _photo(tmp_path / "photo.png")
+    from PIL import Image
+
+    rgb = np.asarray(Image.open(source).convert("RGB"), dtype=np.float64)
+    for method in ("edges", "silhouette", "focus", "rect", "threshold", "none"):
+        config = SubjectConfig(method=method, rect=(0.2, 0.2, 0.8, 0.8) if method == "rect" else None)
+        mask = matte(rgb, 48, config)
+        assert mask.shape == (48, 48)
+        assert mask.min() >= 0.0 and mask.max() <= 1.0 + 1e-9
+        if method == "none":
+            assert mask.min() > 0.99
+        else:
+            assert 0.0 < float(mask.mean()) < 1.0, method
+
+
+def test_subject_config_validation():
+    from fractalgen import Config
+    from fractalgen.config import ConfigError, SubjectConfig
+
+    assert SubjectConfig().method == "auto"
+    assert Config.from_dict({"image": {"subject": {"method": "rect", "rect": [0.1, 0.1, 0.9, 0.9]}}}).image.subject.method == "rect"
+    with pytest.raises(ConfigError, match="rect"):
+        Config.from_dict({"image": {"subject": {"method": "rect"}}})
+    with pytest.raises(ConfigError, match="method"):
+        Config.from_dict({"image": {"subject": {"method": "magic"}}})
+
+
+def test_trap_mask_separates_shape_from_colour(tmp_path: Path):
+    """orbit_trap.mask supplies the silhouette while orbit_trap.image supplies colour."""
+    import numpy as np
+    from PIL import Image
+
+    from fractalgen import Config, render_image
+
+    colour = np.zeros((64, 64, 3), dtype=np.uint8)
+    colour[..., 0] = 220  # a red picture
+    colour_path = tmp_path / "red.png"
+    Image.fromarray(colour).save(colour_path)
+
+    mask = np.zeros((64, 64), dtype=np.uint8)
+    mask[16:48, 16:48] = 255  # a square silhouette
+    mask_path = tmp_path / "mask.png"
+    Image.fromarray(mask).save(mask_path)
+
+    config = Config.from_dict(
+        {
+            "fractal": {
+                "size": 96,
+                "iterations": 40,
+                "polynomial": {"mode": "roots", "roots": [[1, 0], [-1, 0], [0, 1], [0, -1]]},
+                "orbit_trap": {"image": str(colour_path), "mask": str(mask_path), "size": 64},
+            },
+            "image": {"return_type": "trap", "shading": {"type": "none"}},
+        }
+    )
+    assert config.fractal.orbit_trap.mask == mask_path
+    rgb = render_image(config).rgb
+    # the trap colour comes from the picture: red dominates
+    assert rgb[..., 0].mean() > rgb[..., 2].mean()

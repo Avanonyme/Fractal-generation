@@ -31,9 +31,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from . import subject as subject_module
 from ._numeric import as_float, as_int
 from .colour import rgb_to_hex
-from .config import ColourConfig, Config, ConfigError, MapConfig, OrbitTrapConfig
+from .config import ColourConfig, Config, ConfigError, MapConfig, OrbitTrapConfig, SubjectConfig
 
 #: Source formats the CLI scans a folder for.
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"})
@@ -154,6 +155,7 @@ def analyse_image(
     colours: int = 6,
     raster_size: int = 96,
     seed: int = 0,
+    subject: SubjectConfig | None = None,
 ) -> ImageAnalysis:
     """Extract a palette, a raster and a shape mask from ``path``."""
     source = Path(path).expanduser()
@@ -166,11 +168,20 @@ def analyse_image(
 
     rgb = _load_rgb(source)
     raster = _rasterise(rgb, size)
-    threshold = otsu_threshold(raster)
-    trap_bitmap = raster > threshold
-    if trap_bitmap.all() or not trap_bitmap.any():
-        # A flat image has no shape to trap: fall back to the middle of its range.
-        trap_bitmap = raster >= float(np.median(raster))
+
+    if subject is not None and subject.method != "none":
+        # A bitmap trap needs a *shape*: thresholding a photo marks half of it and
+        # the distance field becomes haze. The matte decides what the subject is.
+        matte = subject_module.matte(rgb, size, subject)
+        trap_bitmap = matte > 0.5
+        if trap_bitmap.all() or not trap_bitmap.any():
+            trap_bitmap = raster >= float(np.median(raster))
+    else:
+        threshold = otsu_threshold(raster)
+        trap_bitmap = raster > threshold
+        if trap_bitmap.all() or not trap_bitmap.any():
+            # A flat image has no shape to trap: fall back to the middle of its range.
+            trap_bitmap = raster >= float(np.median(raster))
 
     palette = ColourConfig(mode="colors", colors=_dominant_colours(rgb, count, seed))
     return ImageAnalysis(
@@ -192,8 +203,10 @@ def write_assets(
     target.mkdir(parents=True, exist_ok=True)
     raster_path = target / f"{stem}_raster.png"
     palette_path = target / f"{stem}_palette.json"
+    mask_path = target / f"{stem}_mask.png"
 
     Image.fromarray(analysis.raster, mode="L").save(raster_path)
+    Image.fromarray((analysis.trap_bitmap.astype(np.uint8) * 255), mode="L").save(mask_path)
     palette_path.write_text(
         json.dumps(
             {
@@ -220,6 +233,7 @@ def config_from_image(
     stem: str | None = None,
     return_type: str | None = None,
     trap_scale: float = 2.0,
+    subject: SubjectConfig | None = None,
 ) -> Config:
     """Return a copy of ``config`` wired to the image's palette, map and trap.
 
@@ -228,7 +242,7 @@ def config_from_image(
     working regardless of where the render is started from.
     """
     source = Path(path).expanduser()
-    analysis = analyse_image(source, colours=colours, raster_size=raster_size)
+    analysis = analyse_image(source, colours=colours, raster_size=raster_size, subject=subject)
     name = stem or source.stem
 
     target = Path(output) if output is not None else config.resolve_output()
@@ -236,6 +250,7 @@ def config_from_image(
     # directory: they belong next to a render, or in ./out.
     directory = target.parent if target is not None else Path.cwd() / "out"
     raster_path, _ = write_assets(analysis, directory, stem=name)
+    mask_path = directory / f"{name}_mask.png"
 
     # Orbit-trap colouring needs the picture's colours, not its luminance raster.
     render_type = return_type or config.image.return_type
@@ -251,6 +266,7 @@ def config_from_image(
         fractal,
         orbit_trap=OrbitTrapConfig(
             image=trap_image,
+            mask=mask_path if (tiled and mask_path.is_file()) else None,
             size=raster_size,
             distance_mode=1,
             scale=trap_scale if tiled else 1.0,
