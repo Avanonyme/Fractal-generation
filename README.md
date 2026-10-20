@@ -259,11 +259,24 @@ Three things come out of one picture:
 | raster (`*_raster.png`) | luminance, `--raster-size` square | sampled per pixel as the **map modifier** |
 | trap bitmap | the raster thresholded (Otsu) | orbit trap, so the silhouette also appears in the relief |
 
-**An orbit trap does not reproduce a picture.** It records how close an orbit came
-to the trapped shape, and a converging Newton orbit visits only a small part of
-the plane, so a trapped tree shows up as a few bands, not a tree. To see the
-picture, use `fractal.map.blend` (image-space multiply) or
-`image.return_type: "image"` (the picture's colours, the fractal as texture).
+**Orbit-trap colouring.** A distance-only trap does *not* reproduce a picture: it
+records how close an orbit came to the shape, and a converging Newton orbit visits
+only a small part of the plane, so a trapped tree renders as a few bands. Digital
+orbit trapping instead samples the **trap image's colour at every orbit point**
+(iq's *bitmap orbit traps*, Carlson's artistic orbit traps). Set
+`image.return_type: "trap"` and the pixel takes that colour:
+
+```jsonc
+"fractal": {"orbit_trap": {"image": "tree.png", "size": 128, "colour_mode": "closest"}},
+"image":   {"return_type": "trap"}
+```
+
+`orbit_trap.colour_mode` picks the sample: `closest` (default - colour at the
+orbit's closest approach, the picture reads clearly and repeats across basins),
+`average` (mean along the orbit, pale) or `last` (colour at the final orbit point).
+
+If the picture must sit in the frame *as drawn*, use `fractal.map.blend` or
+`image.return_type: "image"` (picture colours, fractal as texture) instead.
 
 Orbit traps sample the *render domain* (not a hard-coded `[-1, 1]²`, which used to
 clamp every zoomed orbit to the border), index `[row=imag, col=real]` (they used

@@ -41,6 +41,7 @@ from .animations import (
     RESOLVE_DEFAULTS,
 )
 from .config import (
+    OrbitTrapConfig,
     AnimationConfig,
     ColourConfig,
     Config,
@@ -179,6 +180,7 @@ _CHOICE_LABELS: dict[str, dict[str, str]] = {
         "distance": "Orbit-trap distance",
         "boundary": "Fractal boundary mask",
         "image": "Source image colours + fractal structure",
+        "trap": "Orbit-trap colouring (image painted along the orbits)",
     },
     "image.shading.type": {
         "matplotlib": "Hillshade (LightSource)",
@@ -202,6 +204,11 @@ _CHOICE_LABELS: dict[str, dict[str, str]] = {
         "taylor": "Taylor series of a function",
     },
     "fractal.map.mode": {"damping": "Damping (strong)", "warp": "Warp (subtle)"},
+    "fractal.orbit_trap.colour_mode": {
+        "closest": "Closest approach (image clearly visible)",
+        "average": "Average along the orbit (washed out)",
+        "last": "Last orbit point",
+    },
     "video.codec": {"gif": "GIF", "mp4": "MP4 (needs imageio-ffmpeg)"},
     "colour.accent": {
         "complementary": "Complementary",
@@ -221,6 +228,7 @@ _CHOICES: dict[str, tuple[Any, ...]] = {
     "fractal.polynomial.mode": PolynomialConfig.MODES,
     "fractal.polynomial.function": PolynomialConfig.FUNCTIONS,
     "fractal.orbit_trap.distance_mode": tuple(range(8)),
+    "fractal.orbit_trap.colour_mode": OrbitTrapConfig.COLOUR_MODES,
     "fractal.map.mode": MapConfig.MODES,
     "colour.mode": ColourConfig.MODES,
     "colour.accent": ColourConfig.ACCENTS,

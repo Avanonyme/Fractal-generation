@@ -375,10 +375,21 @@ class OrbitTrapConfig:
     image: Path | None = None
     size: int = 800
     distance_mode: int = 1
+    #: How the trap image colours a pixel (see ``render_type: trap``):
+    #: ``closest`` = colour at the orbit's closest approach to the shape,
+    #: ``average`` = mean of the trap colours along the whole orbit,
+    #: ``last`` = colour at the last sampled orbit point.
+    colour_mode: str = "closest"
+
+    COLOUR_MODES = ("closest", "average", "last")
 
     def __post_init__(self) -> None:
         if not 0 <= self.distance_mode <= 7:
             raise ConfigError("fractal.orbit_trap.distance_mode: must be within 0..7")
+        if self.colour_mode not in self.COLOUR_MODES:
+            raise ConfigError(
+                f"fractal.orbit_trap.colour_mode: expected one of {list(self.COLOUR_MODES)}, got {self.colour_mode!r}"
+            )
         if self.size < 16:
             raise ConfigError("fractal.orbit_trap.size: must be >= 16")
 
@@ -391,16 +402,22 @@ class OrbitTrapConfig:
         if isinstance(value, OrbitTrapConfig):
             return value
         data = _require_mapping(value, path)
-        _check_keys(data, ["image", "size", "distance_mode"], path)
+        _check_keys(data, ["image", "size", "distance_mode", "colour_mode"], path)
         default = cls()
         return cls(
             image=_as_path(data.get("image"), f"{path}.image"),
             size=_as_int(data.get("size", default.size), f"{path}.size", minimum=16),
             distance_mode=_as_int(data.get("distance_mode", default.distance_mode), f"{path}.distance_mode"),
+            colour_mode=_as_choice(data.get("colour_mode", default.colour_mode), cls.COLOUR_MODES, f"{path}.colour_mode"),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"image": None if self.image is None else str(self.image), "size": self.size, "distance_mode": self.distance_mode}
+        return {
+            "image": None if self.image is None else str(self.image),
+            "size": self.size,
+            "distance_mode": self.distance_mode,
+            "colour_mode": self.colour_mode,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -852,6 +869,7 @@ class ImageConfig:
         "boundary",
         "roots",
         "image",
+        "trap",
     )
 
     def __post_init__(self) -> None:

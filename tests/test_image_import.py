@@ -215,7 +215,9 @@ def test_return_type_image_uses_the_source_picture(tmp_path: Path):
     assert config.image.return_type in ImageConfig.RETURN_TYPES
 
     rendered = render_image(config).rgb.astype(float)
-    picture = np.asarray(Image.open(config.fractal.map.image).convert("RGB").resize((96, 96)), dtype=float)
+    source_path = config.fractal.map.image
+    assert source_path is not None
+    picture = np.asarray(Image.open(source_path).convert("RGB").resize((96, 96)), dtype=float)
     rendered_small = np.asarray(Image.fromarray(rendered.astype(np.uint8)).resize((96, 96)), dtype=float)
     a = (rendered_small - rendered_small.mean()) / (rendered_small.std() or 1.0)
     b = (picture - picture.mean()) / (picture.std() or 1.0)

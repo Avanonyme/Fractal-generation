@@ -34,7 +34,7 @@ import numpy as np
 
 from .config import ConfigError, FractalConfig
 from .edges import detect_boundary
-from .orbit import OrbitTrap
+from .orbit import OrbitTrap, sample_colour
 from .polynomial import Polynomial
 
 __all__ = ["FractalImage", "solve", "pixel_grid", "choose_polynomial", "chunk_slices"]
@@ -49,6 +49,7 @@ class FractalImage:
     roots: np.ndarray
     roots_distance: np.ndarray
     distance: np.ndarray | None
+    trap_colour: np.ndarray | None
     normal: np.ndarray | None
     boundary: np.ndarray
     polynomial: Polynomial
@@ -90,6 +91,10 @@ class FractalImage:
             if self.distance is None:
                 raise ValueError("render type 'distance' needs an orbit trap")
             return self.distance
+        if kind == "trap":
+            if self.trap_colour is None:
+                raise ValueError("render type 'trap' needs an orbit trap image with colour")
+            return self.trap_colour
         if kind == "boundary":
             return self.boundary.astype(np.float64)
         if kind == "roots":
@@ -218,14 +223,27 @@ def _newton(
     config: FractalConfig,
     trap: OrbitTrap | None,
     damping: complex | np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
     z = np.asarray(start, dtype=np.complex128).ravel().copy()
     iterations = np.full(z.shape, config.iterations + 1, dtype=np.float64)
     smooth = np.full(z.shape, config.iterations + 1, dtype=np.float64)
     previous = np.full(z.shape, np.inf)
     active = np.ones(z.shape, dtype=bool)
     trap_field = trap
-    distance = np.full(z.shape, np.inf) if trap_field is not None else None
+    if trap_field is not None:
+        # Seed with the pixel's own position: Newton collapses onto a root within
+        # a few steps, so an orbit-only trap barely samples the image.
+        distance = np.minimum(np.full(z.shape, np.inf), trap_field.sample(z, config.domain))
+        trap_colour = (
+            sample_colour(trap_field, z, config.domain) if trap_field.colour is not None else None
+        )
+        colour_sum = np.zeros_like(trap_colour) if trap_colour is not None else None
+        colour_count = np.zeros(z.shape) if trap_colour is not None else None
+    else:
+        distance = None
+        trap_colour = None
+        colour_sum = None
+        colour_count = None
 
     for step in range(1, config.iterations + 1):
         index = np.flatnonzero(active)
@@ -251,9 +269,26 @@ def _newton(
         previous[index] = magnitude
 
         if distance is not None and trap_field is not None:
-            distance[index] = np.minimum(distance[index], trap_field.sample(current, config.domain))
+            sampled = trap_field.sample(current, config.domain)
+            closer = sampled < distance[index]
+            distance[index] = np.minimum(distance[index], sampled)
+            if trap_colour is not None and colour_sum is not None and colour_count is not None:
+                # Orbit-trap colouring (iq's bitmap traps): the pixel takes the
+                # trap image's colour sampled *along the orbit*.
+                picked = sample_colour(trap_field, current, config.domain)
+                mode = trap_field.colour_mode
+                if mode == "closest":
+                    if closer.any():
+                        trap_colour[index[closer]] = picked[closer]
+                elif mode == "last":
+                    trap_colour[index] = picked
+                else:  # average
+                    colour_sum[index] += picked
+                    colour_count[index] += 1.0
+                    averaged: np.ndarray = colour_sum[index] / colour_count[index][:, None]
+                    trap_colour[index] = averaged
 
-    return iterations, smooth, z, distance
+    return iterations, smooth, z, distance, trap_colour
 
 
 def _halley(
@@ -262,14 +297,27 @@ def _halley(
     config: FractalConfig,
     trap: OrbitTrap | None,
     damping: complex | np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
     z = np.asarray(start, dtype=np.complex128).ravel().copy()
     iterations = np.full(z.shape, config.iterations + 1, dtype=np.float64)
     smooth = np.full(z.shape, config.iterations + 1, dtype=np.float64)
     previous = np.full(z.shape, np.inf)
     active = np.ones(z.shape, dtype=bool)
     trap_field = trap
-    distance = np.full(z.shape, np.inf) if trap_field is not None else None
+    if trap_field is not None:
+        # Seed with the pixel's own position: Newton collapses onto a root within
+        # a few steps, so an orbit-only trap barely samples the image.
+        distance = np.minimum(np.full(z.shape, np.inf), trap_field.sample(z, config.domain))
+        trap_colour = (
+            sample_colour(trap_field, z, config.domain) if trap_field.colour is not None else None
+        )
+        colour_sum = np.zeros_like(trap_colour) if trap_colour is not None else None
+        colour_count = np.zeros(z.shape) if trap_colour is not None else None
+    else:
+        distance = None
+        trap_colour = None
+        colour_sum = None
+        colour_count = None
 
     for step in range(1, config.iterations + 1):
         index = np.flatnonzero(active)
@@ -291,9 +339,26 @@ def _halley(
         previous[index] = magnitude
 
         if distance is not None and trap_field is not None:
-            distance[index] = np.minimum(distance[index], trap_field.sample(current, config.domain))
+            sampled = trap_field.sample(current, config.domain)
+            closer = sampled < distance[index]
+            distance[index] = np.minimum(distance[index], sampled)
+            if trap_colour is not None and colour_sum is not None and colour_count is not None:
+                # Orbit-trap colouring (iq's bitmap traps): the pixel takes the
+                # trap image's colour sampled *along the orbit*.
+                picked = sample_colour(trap_field, current, config.domain)
+                mode = trap_field.colour_mode
+                if mode == "closest":
+                    if closer.any():
+                        trap_colour[index[closer]] = picked[closer]
+                elif mode == "last":
+                    trap_colour[index] = picked
+                else:  # average
+                    colour_sum[index] += picked
+                    colour_count[index] += 1.0
+                    averaged: np.ndarray = colour_sum[index] / colour_count[index][:, None]
+                    trap_colour[index] = averaged
 
-    return iterations, smooth, z, distance
+    return iterations, smooth, z, distance, trap_colour
 
 
 def _smooth_iteration(step: int, residual: np.ndarray, tolerance: float, order: int = 2) -> np.ndarray:
@@ -476,7 +541,7 @@ def _solve_tile(
     polynomial: Polynomial,
     config: FractalConfig,
     trap: OrbitTrap | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
     kernel = _KERNELS[config.method]
     shape = np.asarray(start).shape
     origin = np.asarray(start, dtype=np.complex128).reshape(-1)
@@ -487,7 +552,7 @@ def _solve_tile(
         damping = config.damping
     else:
         damping = _pixel_damping(config, origin)
-    iterations, smooth, roots, distance = kernel(start, polynomial, config, trap, damping)
+    iterations, smooth, roots, distance, trap_colour = kernel(start, polynomial, config, trap, damping)
 
     # Distance from each pixel to the attractor it reached, measured on the raw
     # values: this is the smooth "basin potential" used for shading, so it must
@@ -497,7 +562,16 @@ def _solve_tile(
     if config.round_digits:
         roots = np.round(roots, config.round_digits)
     distance = None if distance is None else distance.reshape(shape)
-    return iterations.reshape(shape), smooth.reshape(shape), roots.reshape(shape), reveal.reshape(shape), distance
+    if trap_colour is not None:
+        trap_colour = trap_colour.reshape(shape[0], shape[1], 3) if len(shape) == 2 else trap_colour
+    return (
+        iterations.reshape(shape),
+        smooth.reshape(shape),
+        roots.reshape(shape),
+        reveal.reshape(shape),
+        distance,
+        trap_colour,
+    )
 
 
 def solve(
@@ -536,22 +610,25 @@ def solve(
 
     tiles = chunk_slices(config.size, workers)
     if len(tiles) == 1:
-        iterations, smooth, roots, reveal, distance = _solve_tile(grid, polynomial, config, trap)
+        iterations, smooth, roots, reveal, distance, trap_colour = _solve_tile(grid, polynomial, config, trap)
     else:
         iterations = np.empty(grid.shape, dtype=np.float64)
         smooth = np.empty(grid.shape, dtype=np.float64)
         roots = np.empty(grid.shape, dtype=np.complex128)
         reveal = np.empty(grid.shape, dtype=np.float64)
+        trap_colour = np.zeros((*grid.shape, 3)) if trap is not None and trap.colour is not None else None
         distance = np.full(grid.shape, np.inf) if trap is not None else None
         arguments = [(grid[rows, columns], polynomial, config, trap) for rows, columns in tiles]
         with ProcessPoolExecutor(max_workers=min(len(tiles), workers)) as pool:
             results = list(pool.map(_solve_tile_star, arguments))
         for (rows, columns), tile in zip(tiles, results):
-            tile_iterations, tile_smooth, tile_roots, tile_reveal, tile_distance = tile
+            tile_iterations, tile_smooth, tile_roots, tile_reveal, tile_distance, tile_colour = tile
             iterations[rows, columns] = tile_iterations
             smooth[rows, columns] = tile_smooth
             roots[rows, columns] = tile_roots
             reveal[rows, columns] = tile_reveal
+            if trap_colour is not None and tile_colour is not None:
+                trap_colour[rows, columns] = tile_colour
             if distance is not None and tile_distance is not None:
                 distance[rows, columns] = tile_distance
 
@@ -573,6 +650,7 @@ def solve(
         roots=roots,
         roots_distance=reveal,
         distance=distance,
+        trap_colour=trap_colour,
         normal=normal,
         boundary=boundary,
         polynomial=polynomial,
@@ -623,7 +701,7 @@ def _apply_iteration_budget(
         probe = config.derive(iterations=budget)
         sample_size = min(96, config.size)
         probe = probe.derive(size=sample_size)
-        iterations, _, _, _, _ = _solve_tile(pixel_grid(sample_size, probe.domain), polynomial, probe, trap)
+        iterations, _, _, _, _, _ = _solve_tile(pixel_grid(sample_size, probe.domain), polynomial, probe, trap)
         saturation = np.mean(iterations > budget).item()
         if progress:
             print(f"iteration budget {budget}: {100 * (1 - saturation):.1f}% converged")
@@ -632,7 +710,7 @@ def _apply_iteration_budget(
         budget = min(budget * 2, ceiling)
 
 
-def _solve_tile_star(arguments) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+def _solve_tile_star(arguments) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
     """Picklable wrapper for :func:`_solve_tile` (module-level for multiprocessing)."""
     return _solve_tile(*arguments)
 
@@ -652,7 +730,7 @@ def _generated_area(polynomial: Polynomial, config: FractalConfig, sample: int =
     steps = min(config.iterations, 50)
     probe_config = config.derive(size=sample, iterations=steps)
     grid = pixel_grid(sample, config.domain)
-    iterations, _, _, _, _ = _solve_tile(grid, polynomial, probe_config, None)
+    iterations, _, _, _, _, _ = _solve_tile(grid, polynomial, probe_config, None)
     return (iterations > iterations.mean()).mean().item()
 
 

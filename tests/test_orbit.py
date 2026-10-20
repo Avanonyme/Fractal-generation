@@ -86,3 +86,68 @@ def test_load_orbit_trap_scales_and_errors(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         load_orbit_trap(OrbitTrapConfig(image=tmp_path / "nope.png"), tmp_path)
+
+
+def _tree_bitmap(size: int = 64) -> np.ndarray:
+    """A crude tree: dark canopy + trunk on a light background."""
+    bitmap = np.full((size, size), 220.0)
+    bitmap[size // 2 :, size // 2 - 2 : size // 2 + 2] = 70.0  # trunk
+    centre = size // 2
+    radius = size // 3
+    yy, xx = np.mgrid[0:size, 0:size]
+    canopy = (xx - centre) ** 2 + (yy - centre // 2) ** 2 < radius**2
+    bitmap[canopy] = 40.0
+    return bitmap
+
+
+def test_trap_colour_mode_default_and_validation():
+    from fractalgen.config import Config, ConfigError, OrbitTrapConfig
+
+    assert OrbitTrapConfig().colour_mode == "closest"
+    config = Config.from_dict({"fractal": {"orbit_trap": {"colour_mode": "average"}}})
+    assert config.fractal.orbit_trap.colour_mode == "average"
+    with pytest.raises(ConfigError, match="colour_mode"):
+        Config.from_dict({"fractal": {"orbit_trap": {"colour_mode": "rainbow"}}})
+
+
+def test_trap_colouring_paints_the_source_shape(tmp_path):
+    """return_type 'trap' must reproduce the trap image's colours."""
+    import numpy as np
+    from PIL import Image
+
+    from fractalgen import Config, render_image
+
+    bitmap = _tree_bitmap(96)
+    rgb = np.dstack([bitmap, bitmap, bitmap]).astype(np.uint8)
+    path = tmp_path / "tree.png"
+    Image.fromarray(rgb).save(path)
+
+    config = Config.from_dict(
+        {
+            "fractal": {
+                "size": 192,
+                "iterations": 60,
+                "polynomial": {"mode": "roots", "roots": [[1, 0], [-1, 0], [0, 1], [0, -1]]},
+                "orbit_trap": {"image": str(path), "size": 96, "colour_mode": "closest"},
+            },
+            "image": {"return_type": "trap", "shading": {"type": "none"}},
+        }
+    )
+    rendered = render_image(config).rgb
+    assert rendered.shape == (192, 192, 3)
+    # the source has dark (tree) and light (background) regions, so the render must
+    # contain both, in roughly the source's proportions
+    dark_share = float((rendered.mean(axis=2) < 120).mean())
+    # Orbit trapping repeats the picture across the basins, so exact proportions do
+    # not survive - but both tones must be clearly present.
+    assert dark_share > 0.05
+    assert float(rendered.mean()) < 235.0
+    assert float(rendered.std()) > 25.0
+
+
+def test_trap_colour_requires_a_trap_image(tmp_path):
+    from fractalgen import Config, render_image
+
+    config = Config.from_dict({"fractal": {"size": 64}, "image": {"return_type": "trap"}})
+    with pytest.raises(ValueError, match="needs an orbit trap"):
+        render_image(config)

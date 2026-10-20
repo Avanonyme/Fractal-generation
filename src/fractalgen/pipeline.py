@@ -78,7 +78,13 @@ def build_frame(
     which the zoom animation uses so brightness does not drift between frames.
     """
     image_config = config.image
-    if image_config.return_type == "image":
+    if image_config.return_type == "trap":
+        # Orbit-trap colouring: the colour each pixel gets is the trap image's
+        # colour at the orbit's closest approach (iq's bitmap traps, Carlson).
+        if fractal.trap_colour is None:
+            raise ValueError("return_type 'trap' needs an orbit trap image")
+        rgb = render.to_uint8(np.clip(fractal.trap_colour, 0.0, 1.0) * 255.0)
+    elif image_config.return_type == "image":
         # The source image supplies the colour, the fractal supplies the
         # structure. An orbit trap alone cannot do this: it reports how close an
         # orbit came to the shape, and a converging Newton orbit only visits a
