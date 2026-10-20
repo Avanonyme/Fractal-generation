@@ -4,6 +4,13 @@
 > is left as it was on the final commit: it builds, its test suite passes, and the
 > documented commands work, but expect no further fixes or features. Issues and
 > pull requests are not monitored.
+>
+> Before closing, a final AI-assisted pass (an agent plus delegated workers) was
+> run over the whole repository to clear the outstanding reports: the broken entry
+> points, the untyped parameter dict, the shading rings, the deep-zoom collapse,
+> the flicker/grain exposure drift, the orbit-trap orientation and the missing UI
+> controls were all fixed and are covered by tests. Known limitations that were
+> deliberately left open are listed under *Known limitations* below.
 
 Procedural root-finding fractals (Newton / Halley, *RFA* and *nova* variants) with
 relief shading, palettes, animations and an optional NFT collection front-end.
@@ -465,6 +472,26 @@ original did.
 
 Numerical parity was checked against the original on a fixed polynomial: 100 % of
 pixels land within one iteration of the old result and converge to the same roots.
+
+## Known limitations
+
+Left open on purpose at close, in the order they are likely to bite:
+
+* **Bitmap orbit traps smear along the orbit.** A Newton orbit runs in a
+  near-straight line to its root, so a trapped picture arrives as streaks
+  (`image.trap_mix` fades them). No setting reproduces a photograph as drawn.
+* **Subject detection on painterly images is heuristic.** `image.subject: auto`
+  clusters colours and keeps the centre-most, subject-sized one; on a scene with
+  no colour separation it returns a plausible blob rather than the subject. Use
+  `rect` or hand-edit `<name>_mask.png`.
+* **MP4 needs `imageio-ffmpeg`**, which is not installed by default; without it the
+  renderer falls back to GIF (the UI reports the codec it used).
+* **The web UI is local-only** (127.0.0.1, no auth, single render at a time) and is
+  meant for iterating on parameters, not for serving.
+* **Animations are CPU-bound and single-machine.** `workers` only parallelises
+  within one solve; a long zoom re-solves per keyframe.
+* **`iterations` is a budget, not a constant**: `auto_iterations` grows it for deep
+  zooms, so two very different windows can report different budgets.
 
 ## Tests
 
