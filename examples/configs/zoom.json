@@ -6,14 +6,58 @@
     "iterations": 40,
     "tolerance": 1e-06,
     "auto_iterations": true,
-    "polynomial": {"mode": "roots", "roots": [[1, 0], [-1, 0], [0, 1], [0, -1]]}
+    "polynomial": {
+      "mode": "roots",
+      "roots": [
+        [
+          1,
+          0
+        ],
+        [
+          -1,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          -1
+        ]
+      ]
+    }
   },
-  "colour": {"mode": "colors", "colors": ["#0b0033", "#3b0a63", "#c8326b", "#ffd166"]},
-  "image": {"return_type": "iteration", "shading": {"type": "matplotlib"}},
+  "colour": {
+    "mode": "colors",
+    "colors": [
+      "#0b0033",
+      "#3b0a63",
+      "#c8326b",
+      "#ffd166"
+    ]
+  },
+  "image": {
+    "return_type": "roots",
+    "shading": {
+      "type": "matplotlib",
+      "strength": 0.85,
+      "vertical_exaggeration": 2.0
+    },
+    "smooth": 2.0
+  },
   "video": {
     "fps": 15,
     "duration": 4,
-    "animations": [{"name": "zoom", "zoom_factor": 1.35, "oversample": 2}]
+    "animations": [
+      {
+        "name": "zoom",
+        "zoom_factor": 1.35,
+        "oversample": 2
+      }
+    ]
   },
-  "runtime": {"workers": 0}
+  "runtime": {
+    "workers": 0
+  }
 }

@@ -21,7 +21,7 @@ import numpy as np
 from matplotlib.colors import Colormap
 from PIL import Image
 
-__all__ = ["normalise", "colorize", "save", "load", "compose_over", "resize", "to_uint8"]
+__all__ = ["normalise", "normalise_with", "colorize", "modulate", "save", "load", "compose_over", "resize", "to_uint8"]
 
 
 def normalise(values: np.ndarray) -> np.ndarray:
@@ -72,6 +72,17 @@ def colorize(values: np.ndarray, cmap: Colormap, value_range: tuple[float, float
     scaled = normalise(array) if value_range is None else normalise_with(array, value_range)
     rgba = cmap(scaled)
     return to_uint8(rgba[..., :3] * 255)
+
+
+def modulate(rgb: np.ndarray, intensity: np.ndarray, strength: float = 0.8) -> np.ndarray:
+    """Darken ``rgb`` by a relief intensity field (``1`` = lit, ``0`` = shadow).
+
+    Multiplying instead of colormapping the height keeps the colour field
+    independent of the relief, so height iso-lines cannot show up as contours.
+    """
+    weight = 1.0 - strength + strength * np.clip(np.asarray(intensity, dtype=np.float64), 0.0, 1.0)
+    shaded = np.asarray(rgb, dtype=np.float64) * weight[..., None]
+    return to_uint8(np.clip(shaded, 0, 255))
 
 
 def save(image: np.ndarray, path: str | Path) -> Path:

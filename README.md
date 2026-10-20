@@ -96,8 +96,10 @@ field has a default, and `fractalgen schema` prints the whole model. Input paths
   },
   "colour": {"mode": "matplotlib", "name": "viridis"},
   "image": {
-    "return_type": "iteration",        // iteration | distance | boundary | roots
-    "shading": {"type": "matplotlib", "azimuth": 315, "elevation": 20}
+    "return_type": "smooth",           // smooth | iteration | iteration-steps | root | roots | distance | boundary
+    "smooth": 2.0,                     // colour-field blur (px), kills contour steps
+    "shading": {"type": "matplotlib", "height": "auto", "smooth": 1.0, "strength": 0.8,
+                "azimuth": 315, "elevation": 20, "vertical_exaggeration": 2.0}
   },
   "runtime": {"workers": 0, "verbose": false}   // workers 0 = all cores
 }
@@ -110,9 +112,35 @@ field has a default, and `fractalgen schema` prints the whole model. Input paths
   iteration starts at its critical point.
 * **`orbit_trap`** — a bitmap whose distance field is injected during iteration;
   enables the `distance` render type and true orbit normals.
-* **`shading.type`** — `matplotlib`, `fossil`, `blinn-phong` or `none`. Normals
-  are derived from the height field, so `blinn-phong` works with or without an
-  orbit trap.
+* **`return_type`** chooses the *colour* field: `smooth` (basin hue plus a small
+  inner gradient, the default), `iteration` (continuous count), `iteration-steps`
+  (raw counter), `root` (flat basin identity), `roots` (log distance to the
+  attractor), `distance` (orbit trap), `boundary`.
+* **`shading.type`** — `matplotlib`, `fossil`, `blinn-phong` or `none`. Lighting
+  is a separate layer: the colour comes from `return_type`, the relief only
+  multiplies it (Ultra Fractal's "slope + lighting" split).
+* **`shading.height`** — `auto`, `roots` (log distance to the attractor),
+  `iteration` (`log1p` of the continuous count), `iteration-steps`, `distance`.
+
+### Why shading used to show rings
+
+Two independent causes, both fixed:
+
+1. **Quantised height.** Integer iteration counts are a staircase; shading them
+   embosses every level boundary. Convergent iterations also need a
+   *convergence-order* smooth count, not Mandelbrot's escape-time formula:
+   `nu = n + log_order(ln(u) / ln(tolerance))` with `order = 2` for Newton and
+   `3` for Halley (`u` is the residual at the converging step). Escape-time
+   smoothing assumes `|z| -> infinity` and does not transfer.
+2. **Colourmapping a monotone field is an iso-contour plot.** Any colormap of
+   `iteration` rings by construction, however smooth the count is. The default
+   `smooth` colouring therefore reserves one colormap step per basin hue and
+   only tints 35 % of a step inside it, so hues can never wrap. `image.smooth`
+   additionally blurs the colour field by 2 px to soften the last kinks.
+
+Heights stay in float; lighting is multiplied into the albedo
+(`1 - strength + strength * intensity`) rather than added to a wrapping
+gradient, per the Ultra Fractal / mathr guidance.
 
 ### Deep zoom
 

@@ -12,7 +12,7 @@ import sys
 
 from fractalgen.config import ConfigError
 
-from .config import NftConfig, load_nft_config
+from .config import load_nft_config
 from .generator import generate_collection
 
 __all__ = ["main", "build_parser"]

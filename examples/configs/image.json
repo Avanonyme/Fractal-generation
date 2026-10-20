@@ -7,16 +7,53 @@
     "variant": "standard",
     "iterations": 40,
     "tolerance": 1e-05,
-    "damping": [1.0, 0.0],
+    "damping": [
+      1.0,
+      0.0
+    ],
     "round_digits": 4,
-    "domain": {"x": [-1.0, 1.0], "y": [-1.0, 1.0]},
-    "polynomial": {"mode": "random", "max_degree": 6, "seed": 7, "min_area": 0.1, "max_area": 0.6},
-    "orbit_trap": {"image": null, "size": 800, "distance_mode": 1}
+    "domain": {
+      "x": [
+        -1.0,
+        1.0
+      ],
+      "y": [
+        -1.0,
+        1.0
+      ]
+    },
+    "polynomial": {
+      "mode": "random",
+      "max_degree": 6,
+      "seed": 7,
+      "min_area": 0.1,
+      "max_area": 0.6
+    },
+    "orbit_trap": {
+      "image": null,
+      "size": 800,
+      "distance_mode": 1
+    }
   },
-  "colour": {"mode": "matplotlib", "name": "viridis", "n_colors": 256},
+  "colour": {
+    "mode": "matplotlib",
+    "name": "viridis",
+    "n_colors": 256
+  },
   "image": {
-    "return_type": "iteration",
-    "shading": {"type": "matplotlib", "azimuth": 315, "elevation": 20, "vertical_exaggeration": 1.5, "fraction": 1.2}
+    "return_type": "smooth",
+    "shading": {
+      "type": "matplotlib",
+      "azimuth": 315,
+      "elevation": 20,
+      "vertical_exaggeration": 2.0,
+      "fraction": 1.2,
+      "strength": 0.85
+    },
+    "smooth": 2.0
   },
-  "runtime": {"workers": 0, "verbose": false}
+  "runtime": {
+    "workers": 0,
+    "verbose": false
+  }
 }

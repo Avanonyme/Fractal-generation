@@ -133,3 +133,37 @@ def test_pixel_grid_bounds():
     grid = pixel_grid(10, FractalConfig().domain)
     assert np.real(grid).min() == pytest.approx(-1.0)
     assert np.imag(grid).max() < 1.0
+
+
+def test_continuous_iteration_count_is_monotone_in_the_residual():
+    """nu = n + log2(ln(u)/ln(eps)): u == eps gives exactly n, u < eps gives n..n+1."""
+    from fractalgen.solver import _smooth_iteration
+
+    tolerance = 1e-5
+    exact = _smooth_iteration(7, np.array([tolerance]), tolerance, order=2)
+    smaller = _smooth_iteration(7, np.array([1e-6]), tolerance, order=2)
+    tiny = _smooth_iteration(7, np.array([1e-300]), tolerance, order=2)
+    assert exact[0] == pytest.approx(7.0)
+    assert 7.0 <= smaller[0] <= 8.0
+    assert 7.0 <= tiny[0] <= 8.0
+    assert smaller[0] < tiny[0]
+
+
+def test_shading_height_is_smooth():
+    """The default height must not be the integer counter (that embosses terraces)."""
+    from fractalgen.config import ShadingConfig
+
+    result = solve(FractalConfig(size=64, iterations=20), _polynomial())
+    smooth = result.height_field("iteration", "auto")
+    assert np.unique(np.round(smooth, 6)).size > np.unique(result.iterations).size
+    assert ShadingConfig().height == "auto"
+    assert np.unique(np.round(result.height_field("iteration", "iteration-steps"), 6)).size == np.unique(
+        result.iterations
+    ).size
+
+
+def test_root_colouring_is_piecewise_constant():
+    result = solve(FractalConfig(size=64, iterations=20), _polynomial())
+    index = result.root_index()
+    assert index.max() <= len(result.polynomial.roots)
+    assert index.min() >= 0

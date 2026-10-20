@@ -19,13 +19,35 @@ import numpy as np
 
 from .config import ShadingConfig
 
-__all__ = ["shade", "normals_from_field", "blinn_phong"]
+__all__ = ["relief", "shade", "smooth_field", "normals_from_field", "blinn_phong"]
 
 
-def normals_from_field(field: np.ndarray) -> np.ndarray:
-    """Gradient of ``field`` as a complex array (``dx + 1j * dy``)."""
-    gradient_y, gradient_x = np.gradient(np.asarray(field, dtype=np.float64))
-    return np.asarray(gradient_x + 1j * gradient_y, dtype=np.complex128)
+def smooth_field(field: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian blur of a field, NaN-safe (non-converged pixels are filled first)."""
+    from scipy import ndimage
+
+    array = np.asarray(field, dtype=np.float64)
+    if np.isfinite(array).all():
+        return ndimage.gaussian_filter(array, sigma, mode="nearest")
+    fill = np.nanmax(np.where(np.isfinite(array), array, np.nan))
+    return ndimage.gaussian_filter(np.nan_to_num(array, nan=fill), sigma, mode="nearest")
+
+
+def normals_from_field(field: np.ndarray, scale: float | None = None) -> np.ndarray:
+    """Surface normals (``dx + 1j * dy``) of a height field.
+
+    The gradient of a fractal height field has a huge dynamic range: most of the
+    frame is flat while the filaments are near-vertical. Scaling by a high
+    percentile (instead of using raw slopes) keeps Blinn-Phong shading from
+    turning the detail into noise.
+    """
+    array = np.asarray(field, dtype=np.float64)
+    gradient_y, gradient_x = np.gradient(array)
+    magnitude = np.abs(gradient_x + 1j * gradient_y)
+    if scale is None:
+        reference = np.percentile(magnitude[magnitude > 0], 95) if np.any(magnitude > 0) else 1.0
+        scale = float(reference) or 1.0
+    return np.asarray((gradient_x + 1j * gradient_y) / scale, dtype=np.complex128)
 
 
 def blinn_phong(normals: np.ndarray, config: ShadingConfig) -> np.ndarray:
@@ -58,38 +80,42 @@ def blinn_phong(normals: np.ndarray, config: ShadingConfig) -> np.ndarray:
     return brightness * config.fraction + (1 - config.fraction) / 2
 
 
-def shade(field: np.ndarray, config: ShadingConfig, cmap, fixed_range: bool = False) -> np.ndarray:
-    """Return a shaded image.
+def relief(field: np.ndarray, config: ShadingConfig) -> np.ndarray:
+    """Relief intensity in ``[0, 1]`` for a height field.
 
-    The result is either a 2-D brightness field (``blinn-phong``, needs a
-    colormap afterwards) or an ``(h, w, 4)`` RGBA array (LightSource shading).
-
-    ``fixed_range`` means the caller already scaled ``field`` into ``[0, 1]``
-    against a global range; the light source then keeps that scale instead of
-    re-stretching to each frame's own min/max (animations pass it so brightness
-    does not drift).
+    This deliberately returns *lighting only*. The old implementation let
+    ``LightSource.shade`` colour the image with ``cmap(height)``, which turned
+    every iso-line of the height field into a visible contour: iteration-count
+    terraces gave concentric rings all over the basins. Colour and lighting are
+    now independent - the colour comes from the chosen render field, the relief
+    only modulates its brightness.
     """
     if not config.enabled:
-        return np.asarray(field, dtype=np.float64)
+        return np.ones(np.shape(field), dtype=np.float64)
+
+    height = np.asarray(field, dtype=np.float64)
+    if config.smooth > 0:
+        height = smooth_field(height, config.smooth)
 
     if config.type == "blinn-phong":
-        return blinn_phong(normals_from_field(field), config)
+        brightness = blinn_phong(normals_from_field(height), config)
+        low, high = np.percentile(brightness, [2, 98])
+        return np.clip((brightness - low) / max(high - low, 1e-9), 0.0, 1.0)
 
-    from matplotlib.colors import LightSource, Normalize
+    from matplotlib.colors import LightSource
 
-    blends = {"soft": "soft", "hsv": "hsv", "overlay": "overlay"}
-    blend_mode = blends.get(config.blend_mode, "soft")
     light = LightSource(azdeg=config.azimuth, altdeg=config.elevation)
-    height = np.asarray(field, dtype=np.float64)
+    exaggeration = config.vertical_exaggeration
     if config.type == "fossil":
-        # "fossil" is the original name for shading only the fractal body.
-        height = np.where(height > np.percentile(height, 50), height, height * 0.25)
-    fixed = Normalize(vmin=0.0, vmax=1.0, clip=True) if fixed_range else None
-    return light.shade(
-        height,
-        cmap=cmap,
-        vert_exag=config.vertical_exaggeration,
-        fraction=config.fraction,
-        blend_mode=blend_mode,  # type: ignore[arg-type]
-        norm=fixed,
-    )
+        # "fossil" keeps the plateau look: flatten the low half of the field so
+        # only the fractal body catches the light.
+        threshold = np.percentile(height, 50)
+        height = np.where(height > threshold, height, threshold + (height - threshold) * 0.15)
+        exaggeration *= 1.6
+    return light.hillshade(height, vert_exag=exaggeration, fraction=config.fraction)
+
+
+def shade(field: np.ndarray, config: ShadingConfig, cmap=None, fixed_range: bool = False) -> np.ndarray:
+    """Backwards-compatible alias returning the relief intensity."""
+    del cmap, fixed_range
+    return relief(field, config)

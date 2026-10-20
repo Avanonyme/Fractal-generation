@@ -14,7 +14,7 @@ import numpy as np
 from matplotlib.colors import Colormap, LinearSegmentedColormap, ListedColormap, to_hex, to_rgb, to_rgba
 
 from . import optional
-from ._numeric import as_float, as_int
+from ._numeric import as_float
 from .config import ColourConfig, ConfigError
 
 __all__ = [

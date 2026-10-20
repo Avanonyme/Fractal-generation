@@ -27,7 +27,7 @@ from .animations import EFFECTS, AnimationContext, resolve_effect_params
 from .colour import build_colormap
 from .config import AnimationConfig, Config
 from .frames import FrameStore
-from .shading import shade
+from .shading import relief, smooth_field
 from .solver import FractalImage, solve
 
 __all__ = [
@@ -79,20 +79,18 @@ def build_frame(
     """
     image_config = config.image
     field = fractal.scalar_field(image_config.return_type)
+    if image_config.smooth > 0 and image_config.return_type in ("iteration", "roots"):
+        field = smooth_field(field, image_config.smooth)
+    rgb = render.colorize(field, cmap, value_range)
 
-    if image_config.shading.enabled:
-        shading_config = image_config.shading
+    shading_config = image_config.shading
+    if shading_config.enabled:
         if azimuth is not None:
             shading_config = replace(shading_config, azimuth=azimuth)
-        height = fractal.iterations if image_config.return_type == "boundary" else fractal.height_field(
-            image_config.return_type
-        )
+        height = fractal.height_field(image_config.return_type, shading_config.height)
         if height_range is not None:
             height = render.normalise_with(height, height_range)
-        shaded = np.asarray(shade(height, shading_config, cmap, fixed_range=height_range is not None))
-        rgb = render.colorize(shaded, cmap, value_range)
-    else:
-        rgb = render.colorize(field, cmap, value_range)
+        rgb = render.modulate(rgb, relief(height, shading_config), shading_config.strength)
 
     if background is not None:
         rgb = render.compose_over(rgb, background, image_config.alpha)

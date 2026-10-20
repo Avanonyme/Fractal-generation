@@ -6,10 +6,52 @@
     "iterations": 40,
     "auto_iterations": true,
     "max_iterations": 4096,
-    "domain": {"x": [-0.00490625, -0.00489375], "y": [-0.00490625, -0.00489375]},
-    "polynomial": {"mode": "roots", "roots": [[1, 0], [-1, 0], [0, 1], [0, -1]]}
+    "domain": {
+      "x": [
+        -0.00490625,
+        -0.00489375
+      ],
+      "y": [
+        -0.00490625,
+        -0.00489375
+      ]
+    },
+    "polynomial": {
+      "mode": "roots",
+      "roots": [
+        [
+          1,
+          0
+        ],
+        [
+          -1,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          -1
+        ]
+      ]
+    }
   },
-  "colour": {"mode": "matplotlib", "name": "twilight_shifted"},
-  "image": {"return_type": "iteration", "shading": {"type": "matplotlib"}},
-  "runtime": {"workers": 0}
+  "colour": {
+    "mode": "matplotlib",
+    "name": "twilight_shifted"
+  },
+  "image": {
+    "return_type": "roots",
+    "shading": {
+      "type": "matplotlib",
+      "strength": 0.85,
+      "vertical_exaggeration": 2.0
+    },
+    "smooth": 2.0
+  },
+  "runtime": {
+    "workers": 0
+  }
 }

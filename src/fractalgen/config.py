@@ -111,10 +111,6 @@ def _as_choice(value: Any, choices: Sequence[str], path: str) -> str:
     return text
 
 
-def _as_optional_str(value: Any, path: str) -> str | None:
-    return None if value is None else _as_str(value, path)
-
-
 def _as_path(value: Any, path: str) -> Path | None:
     if value is None:
         return None
@@ -515,12 +511,18 @@ class ShadingConfig:
     """Relief shading used on the fractal height field."""
 
     type: str | None = "matplotlib"
+    #: Height field to shade: auto | distance | roots | iteration | iteration-steps
+    #: ``auto`` prefers the orbit-trap distance, then a continuous iteration
+    #: count (integer counts emboss level boundaries into visible terraces).
+    height: str = "auto"
+    #: Gaussian blur applied to the height field, in pixels (0 = off).
+    smooth: float = 1.0
     azimuth: float = 315.0
     elevation: float = 20.0
-    vertical_exaggeration: float = 1.5
+    vertical_exaggeration: float = 2.0
     fraction: float = 1.2
-    blend_mode: str = "soft"
-    gamma: float = 0.3
+    #: How strongly the relief darkens the colour (0 = flat, 1 = full shadow).
+    strength: float = 0.8
     # Blinn-Phong weights: ambient, diffuse, specular, shininess.
     ambient: float = 0.0
     diffuse: float = 0.5
@@ -528,9 +530,15 @@ class ShadingConfig:
     shininess: float = 1.0
 
     TYPES = ("matplotlib", "blinn-phong", "fossil", "none")
+    HEIGHTS = ("auto", "distance", "roots", "iteration", "iteration-steps")
 
     def __post_init__(self) -> None:
-        pass
+        if self.height not in self.HEIGHTS:
+            raise ConfigError(f"shading.height: expected one of {list(self.HEIGHTS)}, got {self.height!r}")
+        if self.smooth < 0:
+            raise ConfigError("shading.smooth: must be >= 0")
+        if not 0.0 <= self.strength <= 1.0:
+            raise ConfigError("shading.strength: must be within 0..1")
 
     @classmethod
     def from_dict(cls, value: Any, path: str = "shading") -> "ShadingConfig":
@@ -543,12 +551,13 @@ class ShadingConfig:
             data,
             [
                 "type",
+                "height",
+                "smooth",
                 "azimuth",
                 "elevation",
                 "vertical_exaggeration",
                 "fraction",
-                "blend_mode",
-                "gamma",
+                "strength",
                 "ambient",
                 "diffuse",
                 "specular",
@@ -567,6 +576,8 @@ class ShadingConfig:
             if len(numbers_) == 4:
                 return cls(
                     type=_shading_type(data.get("type", default.type), path),
+                    height=_as_choice(data.get("height", default.height), cls.HEIGHTS, f"{path}.height"),
+                    smooth=_as_float(data.get("smooth", default.smooth), f"{path}.smooth"),
                     azimuth=numbers_[0],
                     elevation=numbers_[1],
                     vertical_exaggeration=numbers_[2],
@@ -574,6 +585,8 @@ class ShadingConfig:
                 )
             return cls(
                 type=_shading_type(data.get("type", default.type), path),
+                height=_as_choice(data.get("height", default.height), cls.HEIGHTS, f"{path}.height"),
+                smooth=_as_float(data.get("smooth", default.smooth), f"{path}.smooth"),
                 azimuth=numbers_[0],
                 elevation=numbers_[1],
                 specular=numbers_[2],
@@ -582,16 +595,18 @@ class ShadingConfig:
                 shininess=numbers_[5],
                 fraction=numbers_[6],
             )
+        height = _as_choice(data.get("height", default.height), cls.HEIGHTS, f"{path}.height")
         return cls(
             type=_shading_type(data.get("type", default.type), path),
+            height=height,
+            smooth=_as_float(data.get("smooth", default.smooth), f"{path}.smooth"),
             azimuth=_as_float(data.get("azimuth", default.azimuth), f"{path}.azimuth"),
             elevation=_as_float(data.get("elevation", default.elevation), f"{path}.elevation"),
             vertical_exaggeration=_as_float(
                 data.get("vertical_exaggeration", default.vertical_exaggeration), f"{path}.vertical_exaggeration"
             ),
             fraction=_as_float(data.get("fraction", default.fraction), f"{path}.fraction"),
-            blend_mode=_as_str(data.get("blend_mode", default.blend_mode), f"{path}.blend_mode"),
-            gamma=_as_float(data.get("gamma", default.gamma), f"{path}.gamma"),
+            strength=_as_float(data.get("strength", default.strength), f"{path}.strength"),
             ambient=_as_float(data.get("ambient", default.ambient), f"{path}.ambient"),
             diffuse=_as_float(data.get("diffuse", default.diffuse), f"{path}.diffuse"),
             specular=_as_float(data.get("specular", default.specular), f"{path}.specular"),
@@ -607,12 +622,13 @@ class ShadingConfig:
             return {"type": "none"}
         return {
             "type": self.type,
+            "height": self.height,
+            "smooth": self.smooth,
             "azimuth": self.azimuth,
             "elevation": self.elevation,
             "vertical_exaggeration": self.vertical_exaggeration,
             "fraction": self.fraction,
-            "blend_mode": self.blend_mode,
-            "gamma": self.gamma,
+            "strength": self.strength,
             "ambient": self.ambient,
             "diffuse": self.diffuse,
             "specular": self.specular,
@@ -701,27 +717,33 @@ def _colour_entry(value: Any, path: str) -> str:
 class ImageConfig:
     """What a single rendered frame contains."""
 
-    return_type: str = "iteration"
+    return_type: str = "smooth"
+    #: Gaussian blur (pixels) applied to the colour field. It softens the kinks
+    #: the colormap would otherwise turn into visible contour rings; 0 disables.
+    smooth: float = 2.0
     shading: ShadingConfig = field(default_factory=ShadingConfig)
     background: Path | None = None
     alpha: int = 255
 
-    RETURN_TYPES = ("iteration", "distance", "boundary", "roots")
+    RETURN_TYPES = ("smooth", "iteration", "iteration-steps", "root", "distance", "boundary", "roots")
 
     def __post_init__(self) -> None:
         if not 0 <= self.alpha <= 255:
             raise ConfigError("image.alpha: must be within 0..255")
+        if self.smooth < 0:
+            raise ConfigError("image.smooth: must be >= 0")
 
     @classmethod
     def from_dict(cls, value: Any, path: str = "image") -> "ImageConfig":
         if isinstance(value, ImageConfig):
             return value
         data = _require_mapping(value, path)
-        _check_keys(data, ["return_type", "return", "shading", "background", "alpha"], path)
+        _check_keys(data, ["return_type", "return", "smooth", "shading", "background", "alpha"], path)
         default = cls()
         return_type = data.get("return_type", data.get("return", default.return_type))
         return cls(
             return_type=_as_choice(return_type, cls.RETURN_TYPES, f"{path}.return_type"),
+            smooth=_as_float(data.get("smooth", default.smooth), f"{path}.smooth"),
             shading=ShadingConfig.from_dict(data.get("shading", {}), f"{path}.shading"),
             background=_as_path(data.get("background"), f"{path}.background"),
             alpha=_as_int(data.get("alpha", default.alpha), f"{path}.alpha"),
@@ -730,6 +752,7 @@ class ImageConfig:
     def to_dict(self) -> dict[str, Any]:
         return {
             "return_type": self.return_type,
+            "smooth": self.smooth,
             "shading": self.shading.to_dict(),
             "background": None if self.background is None else str(self.background),
             "alpha": self.alpha,

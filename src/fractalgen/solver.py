@@ -44,7 +44,9 @@ class FractalImage:
     """Result of one solve: raw fields plus the polynomial that produced them."""
 
     iterations: np.ndarray
+    smooth_iterations: np.ndarray
     roots: np.ndarray
+    roots_distance: np.ndarray
     distance: np.ndarray | None
     normal: np.ndarray | None
     boundary: np.ndarray
@@ -58,7 +60,7 @@ class FractalImage:
     @property
     def saturation(self) -> float:
         """Share of pixels that exhausted the iteration budget."""
-        return float(np.mean(self.iterations > self.config.iterations))
+        return np.mean(self.iterations > self.config.iterations).item()
 
     @property
     def converged_share(self) -> float:
@@ -70,9 +72,19 @@ class FractalImage:
         return 2.0 / max(self.config.domain.width, 1e-300)
 
     def scalar_field(self, kind: str) -> np.ndarray:
-        """Pick the field that should be colourised."""
+        """Pick the field that should be colourised.
+
+        ``iteration`` is the continuous count (no stepping); use
+        ``iteration-steps`` for the raw integer counter.
+        """
         if kind == "iteration":
+            return self.smooth_iterations
+        if kind == "iteration-steps":
             return self.iterations
+        if kind == "root":
+            return self.root_index().astype(np.float64)
+        if kind == "smooth":
+            return self.smooth_albedo()
         if kind == "distance":
             if self.distance is None:
                 raise ValueError("render type 'distance' needs an orbit trap")
@@ -83,11 +95,88 @@ class FractalImage:
             return np.real(self.roots)
         raise ValueError(f"unknown render type {kind!r}")
 
-    def height_field(self, kind: str = "iteration") -> np.ndarray:
-        """Field used for relief shading (distance when available)."""
+    def height_field(self, kind: str = "iteration", height: str = "auto") -> np.ndarray:
+        """Field used for relief shading.
+
+        Integer iteration counts are a step function, so shading them embosses
+        every level boundary into a visible contour ("terracing"). The default
+        therefore uses a continuous field:
+
+        ``auto``             orbit-trap distance if there is one, else the log
+                             distance to the attractor
+        ``distance``         orbit-trap distance (requires a trap)
+        ``roots``            log distance from each pixel to its attractor
+        ``iteration``        log of the continuous iteration count
+        ``iteration-steps``  raw integer counts (the old terraced look)
+        """
+        if height == "iteration-steps":
+            return self.iterations
+        if height == "distance":
+            if self.distance is None:
+                raise ValueError("shading.height='distance' needs an orbit trap")
+            return self.distance
+        if height == "roots":
+            return self.log_roots_distance()
+        if height == "iteration":
+            return np.log1p(self.smooth_iterations)
+        if height != "auto":
+            raise ValueError(f"unknown shading height {height!r}")
         if self.distance is not None:
             return self.distance
-        return self.scalar_field(kind if kind != "boundary" else "iteration")
+        return self.log_roots_distance()
+
+    def smooth_albedo(self) -> np.ndarray:
+        """Basin hue plus a restrained inner gradient.
+
+        One colormap step is reserved per root, so the value inside basin ``k``
+        stays in ``[k, k + tint]`` and can never cross into the next hue: the
+        colouring is piecewise constant *by construction*, which is the only way
+        to guarantee no contour rings. ``tint`` (0.35 of a step) comes from the
+        continuous iteration count and only adds depth.
+        """
+        index = self.root_index().astype(np.float64)
+        count = self.smooth_iterations
+        low, high = float(np.min(count)), float(np.max(count))
+        tint = (count - low) / (high - low) if high - low > 1e-12 else np.zeros_like(count)
+        return index + 0.35 * tint
+
+    def root_index(self) -> np.ndarray:
+        """Index of the root each pixel converged to; ``len(roots)`` if it did not.
+
+        Colouring by root identity is the only colouring that cannot produce
+        contour rings, because it is piecewise constant per basin.
+        """
+        roots = self.polynomial.roots
+        distances = np.abs(self.roots.ravel()[:, None] - roots[None, :])
+        index = np.argmin(distances, axis=1).reshape(self.shape)
+        index[self.iterations > self.config.iterations] = len(roots)
+        return index
+
+    def log_roots_distance(self) -> np.ndarray:
+        """``log10(|z0 - root|)``: the smooth "basin potential".
+
+        Distance to the root a pixel converged to is continuous and has a
+        continuous gradient across a basin, so shading it produces a smooth
+        gradient. Iteration counts are a staircase (and their fractional
+        "smoothing" is noisy), which is what produced visible contour rings.
+        Non-converged pixels sit on the Julia set: they are clamped to the
+        largest distance so they read as the ridge between basins.
+        """
+        distance = np.asarray(self.roots_distance, dtype=np.float64)
+        finite = distance[np.isfinite(distance)]
+        ceiling = np.percentile(finite, 99.5).item() if finite.size else 1.0
+        ceiling = max(float(ceiling), 1e-9)
+        clamped = np.clip(np.nan_to_num(distance, nan=ceiling, posinf=ceiling), 1e-9, ceiling)
+        return np.log10(clamped)
+
+
+def normalise_field(values: np.ndarray) -> np.ndarray:
+    """Scale a field into ``[0, 1]`` (constant fields become zeros)."""
+    array = np.asarray(values, dtype=np.float64)
+    low, high = array.min(), array.max()
+    if high - low <= 1e-12:
+        return np.zeros_like(array)
+    return (array - low) / (high - low)
 
 
 def pixel_grid(size: int, domain) -> np.ndarray:
@@ -127,9 +216,11 @@ def _newton(
     polynomial: Polynomial,
     config: FractalConfig,
     trap: OrbitTrap | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     z = np.asarray(start, dtype=np.complex128).ravel().copy()
     iterations = np.full(z.shape, config.iterations + 1, dtype=np.float64)
+    smooth = np.full(z.shape, config.iterations + 1, dtype=np.float64)
+    previous = np.full(z.shape, np.inf)
     active = np.ones(z.shape, dtype=bool)
     trap_field = trap
     distance = np.full(z.shape, np.inf) if trap_field is not None else None
@@ -144,18 +235,21 @@ def _newton(
         current = current + delta
         z[index] = current
 
+        magnitude = np.abs(delta)
         # A stalled point (zero derivative) must not count as converged: its
         # step is zero, which would otherwise look like perfect precision.
-        converged = (np.abs(delta) < config.tolerance) & stepped
+        converged = (magnitude < config.tolerance) & stepped
         if converged.any():
             finished = index[converged]
             iterations[finished] = step
+            smooth[finished] = _smooth_iteration(step, magnitude[converged], config.tolerance, order=2)
             active[finished] = False
+        previous[index] = magnitude
 
         if distance is not None and trap_field is not None:
             distance[index] = np.minimum(distance[index], trap_field.sample(current))
 
-    return iterations, z, distance
+    return iterations, smooth, z, distance
 
 
 def _halley(
@@ -163,9 +257,11 @@ def _halley(
     polynomial: Polynomial,
     config: FractalConfig,
     trap: OrbitTrap | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     z = np.asarray(start, dtype=np.complex128).ravel().copy()
     iterations = np.full(z.shape, config.iterations + 1, dtype=np.float64)
+    smooth = np.full(z.shape, config.iterations + 1, dtype=np.float64)
+    previous = np.full(z.shape, np.inf)
     active = np.ones(z.shape, dtype=bool)
     trap_field = trap
     distance = np.full(z.shape, np.inf) if trap_field is not None else None
@@ -180,16 +276,44 @@ def _halley(
         current = current + delta
         z[index] = current
 
-        converged = (np.abs(delta) < config.tolerance) & stepped
+        magnitude = np.abs(delta)
+        converged = (magnitude < config.tolerance) & stepped
         if converged.any():
             finished = index[converged]
             iterations[finished] = step
+            smooth[finished] = _smooth_iteration(step, magnitude[converged], config.tolerance, order=2)
             active[finished] = False
+        previous[index] = magnitude
 
         if distance is not None and trap_field is not None:
             distance[index] = np.minimum(distance[index], trap_field.sample(current))
 
-    return iterations, z, distance
+    return iterations, smooth, z, distance
+
+
+def _smooth_iteration(step: int, residual: np.ndarray, tolerance: float, order: int = 2) -> np.ndarray:
+    """Continuous iteration count for a *convergent* iteration.
+
+    Convergent root finders are super-attracting, so the residual shrinks like
+    ``u_{n+1} ~ u_n**order`` (quadratic for Newton, cubic for Halley). Solving
+    ``ln u_n`` for the fractional step gives
+
+        nu = n + log_order( ln(u) / ln(tolerance) )
+
+    so ``u == tolerance`` yields exactly ``n`` and ``u == sqrt(tolerance)`` yields
+    ``n - 1``. Mandelbrot escape-time smoothing does *not* transfer here (it
+    assumes |z| -> infinity, not convergence), which is why the earlier
+    interpolation of successive steps produced a noisy, banded field.
+
+    ``residual`` is the step size at the iteration that satisfied the tolerance,
+    i.e. the distance to the attracting root.
+    """
+    safe = np.maximum(np.abs(residual), 1e-300)
+    with np.errstate(all="ignore"):
+        ratio = np.log(safe) / np.log(tolerance)
+        offset = np.log(np.maximum(ratio, 1e-300)) / np.log(order)
+    offset = np.nan_to_num(offset, nan=0.0, posinf=0.0, neginf=0.0)
+    return step + np.clip(offset, 0.0, 1.0)
 
 
 def _newton_step(
@@ -260,17 +384,23 @@ def _solve_tile(
     polynomial: Polynomial,
     config: FractalConfig,
     trap: OrbitTrap | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     kernel = _KERNELS[config.method]
     shape = np.asarray(start).shape
+    origin = np.asarray(start, dtype=np.complex128).reshape(-1)
     if config.variant == "nova":
         start, polynomial = _nova_start(start, polynomial, config)
-    iterations, roots, distance = kernel(start, polynomial, config, trap)
+    iterations, smooth, roots, distance = kernel(start, polynomial, config, trap)
+
+    # Distance from each pixel to the attractor it reached, measured on the raw
+    # values: this is the smooth "basin potential" used for shading, so it must
+    # not inherit the root quantisation that root-identity colouring uses.
+    reveal = np.abs(origin - roots)
 
     if config.round_digits:
         roots = np.round(roots, config.round_digits)
     distance = None if distance is None else distance.reshape(shape)
-    return iterations.reshape(shape), roots.reshape(shape), distance
+    return iterations.reshape(shape), smooth.reshape(shape), roots.reshape(shape), reveal.reshape(shape), distance
 
 
 def solve(
@@ -309,17 +439,22 @@ def solve(
 
     tiles = chunk_slices(config.size, workers)
     if len(tiles) == 1:
-        iterations, roots, distance = _solve_tile(grid, polynomial, config, trap)
+        iterations, smooth, roots, reveal, distance = _solve_tile(grid, polynomial, config, trap)
     else:
         iterations = np.empty(grid.shape, dtype=np.float64)
+        smooth = np.empty(grid.shape, dtype=np.float64)
         roots = np.empty(grid.shape, dtype=np.complex128)
+        reveal = np.empty(grid.shape, dtype=np.float64)
         distance = np.full(grid.shape, np.inf) if trap is not None else None
         arguments = [(grid[rows, columns], polynomial, config, trap) for rows, columns in tiles]
         with ProcessPoolExecutor(max_workers=min(len(tiles), workers)) as pool:
             results = list(pool.map(_solve_tile_star, arguments))
-        for (rows, columns), (tile_iterations, tile_roots, tile_distance) in zip(tiles, results):
+        for (rows, columns), tile in zip(tiles, results):
+            tile_iterations, tile_smooth, tile_roots, tile_reveal, tile_distance = tile
             iterations[rows, columns] = tile_iterations
+            smooth[rows, columns] = tile_smooth
             roots[rows, columns] = tile_roots
+            reveal[rows, columns] = tile_reveal
             if distance is not None and tile_distance is not None:
                 distance[rows, columns] = tile_distance
 
@@ -335,15 +470,18 @@ def solve(
     if progress:
         print(f"solved {config.size}x{config.size} in {len(tiles)} tile(s)")
 
-    return FractalImage(
+    image = FractalImage(
         iterations=iterations,
+        smooth_iterations=smooth,
         roots=roots,
+        roots_distance=reveal,
         distance=distance,
         normal=normal,
         boundary=boundary,
         polynomial=polynomial,
         config=config,
     )
+    return image
 
 
 def _processes_available() -> bool:
@@ -357,7 +495,9 @@ def _processes_available() -> bool:
     """
     import __main__
 
-    return hasattr(__main__, "__file__")
+    path = getattr(__main__, "__file__", None)
+    # ``python - <<EOF`` sets __file__ to "<stdin>", which spawn cannot import.
+    return bool(path) and os.path.exists(path)
 
 
 def _apply_iteration_budget(
@@ -386,8 +526,8 @@ def _apply_iteration_budget(
         probe = config.derive(iterations=budget)
         sample_size = min(96, config.size)
         probe = probe.derive(size=sample_size)
-        iterations, _, _ = _solve_tile(pixel_grid(sample_size, probe.domain), polynomial, probe, trap)
-        saturation = float(np.mean(iterations > budget))
+        iterations, _, _, _, _ = _solve_tile(pixel_grid(sample_size, probe.domain), polynomial, probe, trap)
+        saturation = np.mean(iterations > budget).item()
         if progress:
             print(f"iteration budget {budget}: {100 * (1 - saturation):.1f}% converged")
         if saturation <= saturation_limit or budget >= ceiling:
@@ -395,7 +535,7 @@ def _apply_iteration_budget(
         budget = min(budget * 2, ceiling)
 
 
-def _solve_tile_star(arguments) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+def _solve_tile_star(arguments) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     """Picklable wrapper for :func:`_solve_tile` (module-level for multiprocessing)."""
     return _solve_tile(*arguments)
 
@@ -415,7 +555,7 @@ def _generated_area(polynomial: Polynomial, config: FractalConfig, sample: int =
     steps = min(config.iterations, 50)
     probe_config = config.derive(size=sample, iterations=steps)
     grid = pixel_grid(sample, config.domain)
-    iterations, _, _ = _solve_tile(grid, polynomial, probe_config, None)
+    iterations, _, _, _, _ = _solve_tile(grid, polynomial, probe_config, None)
     return (iterations > iterations.mean()).mean().item()
 
 

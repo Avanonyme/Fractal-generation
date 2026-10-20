@@ -40,12 +40,11 @@ class OrbitTrap:
     original implementation, so downstream visuals stay comparable.
     """
 
-    __slots__ = ("field", "mode", "size")
+    __slots__ = ("field", "mode")
 
     def __init__(self, field: np.ndarray, mode: int = 1) -> None:
         self.field = np.asarray(field, dtype=np.float64)
         self.mode = as_int(mode, "orbit_trap.distance_mode")
-        self.size = self.field.shape[0]
 
     @classmethod
     def from_bitmap(cls, bitmap: np.ndarray, mode: int = 1) -> "OrbitTrap":
