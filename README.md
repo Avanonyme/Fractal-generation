@@ -355,6 +355,15 @@ the banded look usable:
 Defaults are `[deband, unsharp]`. Set `"postprocess": []` for the raw banded look,
 or use `"return_type": "smooth"` for a colouring that has no rings to remove.
 
+### UI notes for the image map and trap
+
+The import button fills in the whole chain: palette colours, `fractal.map.image`
+(the luminance raster, blended at `map.blend`), and `fractal.orbit_trap.image`
+(the **original upload**, since trap colouring needs the picture's colours) with
+`scale 2`, `wrap on`, `colour_mode closest`, `size 128` - the same defaults as
+`from-image --return-type trap`. `image.trap_mix` (slider) is the knob that fades
+the orbit streaks.
+
 ## NFT collections
 
 `nftgen` is a thin layer on top of `fractalgen`; `fractalgen` never imports it.

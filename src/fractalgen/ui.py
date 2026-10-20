@@ -295,6 +295,13 @@ _HELP: dict[str, str] = {
     "fractal.damping": "Complex damping [real, imag] applied to every step.",
     "fractal.round_digits": "Root quantisation used for root-identity colouring.",
     "fractal.polynomial.mode": "random, explicit roots, coefficients, or a Taylor series.",
+    "fractal.orbit_trap.scale": "How many times the trap picture spans the frame: 1 = one huge copy, 2-3 = small tiles.",
+    "fractal.orbit_trap.offset": "Shift of the trap picture, in plane units.",
+    "fractal.orbit_trap.wrap": "Tile the trap picture instead of smearing at its edges.",
+    "fractal.orbit_trap.colour_mode": "Where the trap colour is sampled: closest approach, average along the orbit, or the last orbit point.",
+    "fractal.orbit_trap.size": "Trap bitmap resolution; higher keeps small details of the picture.",
+    "image.trap_mix": "How much the trap picture replaces the fractal colours (lower fades the orbit streaks).",
+    "image.return_type": "Which field is coloured: iteration bands, smooth basins, root identity, source image, or orbit trap.",
     "fractal.polynomial.seed": "Seed for the random polynomial (empty = different every run).",
     "fractal.polynomial.max_degree": "Random polynomials use 4..this many coefficients.",
     "fractal.polynomial.min_area": "Reject random polynomials that fill less of the frame.",
@@ -411,7 +418,7 @@ def _iter_leaves(value: Any, prefix: str = "") -> Iterable[tuple[str, Any]]:
 def _kind_for(path: str, value: Any) -> str:
     if path in _CHOICES:
         return "enum" if path != "fractal.orbit_trap.distance_mode" else "int"
-    if path == "fractal.damping":
+    if path in ("fractal.damping", "fractal.orbit_trap.offset"):
         return "complex"
     if path.endswith("domain.x") or path.endswith("domain.y"):
         return "span"
@@ -756,6 +763,8 @@ def import_image(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
         "colours": list(analysis.colours),
+        "source_path": str(source),
+        "source_url": f"/outputs/uploads/{_safe_name(source.name)}",
         "raster_path": str(raster_path),
         "palette_path": str(palette_path),
         "raster_url": f"/outputs/{_safe_name(raster_path.name)}",
@@ -862,6 +871,28 @@ class _Handler(BaseHTTPRequestHandler):
         }.get(path.suffix.lower(), "application/octet-stream")
         self._send(HTTPStatus.OK, path.read_bytes(), content_type)
 
+    def _upload(self, name: str) -> None:
+        """Serve an uploaded source image (used as the trap's colour source)."""
+        try:
+            candidate = _safe_name(name)
+        except ValueError as error:
+            self._error(HTTPStatus.BAD_REQUEST, str(error))
+            return
+        path = _OUTPUT_DIR / "uploads" / candidate
+        if not path.is_file():
+            self._error(HTTPStatus.NOT_FOUND, f"no such upload: {candidate}")
+            return
+        suffix = path.suffix.lower()
+        content_type = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+        }.get(suffix, "application/octet-stream")
+        self._send(HTTPStatus.OK, path.read_bytes(), content_type)
+
     # -- routes ----------------------------------------------------------- #
     def do_GET(self) -> None:  # noqa: N802 - stdlib signature
         route = self.path.split("?", 1)[0]
@@ -874,6 +905,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"outputs": list_outputs()})
             elif route == "/api/health":
                 self._json(HTTPStatus.OK, {"ok": True, "outputs": str(_OUTPUT_DIR)})
+            elif route.startswith("/outputs/uploads/"):
+                self._upload(route[len("/outputs/uploads/") :])
             elif route.startswith("/outputs/"):
                 self._output(route[len("/outputs/") :])
             else:
@@ -1311,7 +1344,12 @@ async function uploadImage(file) {
     const raster = payload.raster_path || payload.raster_url;
     set('fractal.map.image', raster);
     set('fractal.map.strength', 1.4);
-    set('fractal.orbit_trap.image', raster);
+    // Trap colouring needs the picture's colours, not the luminance raster.
+    set('fractal.orbit_trap.image', payload.source_path || raster);
+    set('fractal.orbit_trap.scale', 2);
+    set('fractal.orbit_trap.wrap', true);
+    set('fractal.orbit_trap.colour_mode', 'closest');
+    set('fractal.orbit_trap.size', 128);
     buildControls();
     renderSwatches();
     $('#status').textContent = `palette: ${payload.colours.length} colours`;

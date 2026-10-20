@@ -349,3 +349,46 @@ def test_import_returns_a_server_path_and_the_render_accepts_a_url(server: str):
     status, payload = _post(server, "/api/render", {"form": "image", "config": config})
     assert status == 200, payload
     assert payload["ok"] is True
+
+
+def test_schema_exposes_the_trap_controls():
+    fields = {field["path"]: field for field in build_schema()["fields"]}
+    expected = {
+        "fractal.orbit_trap.scale": "float",
+        "fractal.orbit_trap.offset": "complex",
+        "fractal.orbit_trap.wrap": "bool",
+        "fractal.orbit_trap.colour_mode": "enum",
+        "image.trap_mix": "float",
+    }
+    for path, kind in expected.items():
+        assert path in fields, f"{path} missing from the UI schema"
+        assert fields[path]["kind"] == kind
+        assert fields[path].get("help"), f"{path} has no help text"
+    assert fields["fractal.orbit_trap.scale"]["minimum"] == 0.25
+    assert fields["image.trap_mix"]["maximum"] == 1.0
+    modes = [choice[0] for choice in fields["fractal.orbit_trap.colour_mode"]["choices"]]
+    assert modes == ["closest", "average", "last"]
+
+
+def test_import_returns_the_colour_source_for_trap_renders(server: str):
+    import base64
+    import io
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), (30, 120, 60)).save(buffer, format="PNG")
+    status, body = _post(
+        server,
+        "/api/from-image",
+        {"filename": "tree shot.png", "data": base64.b64encode(buffer.getvalue()).decode(), "colours": 2},
+    )
+    assert status == 200, body
+    assert body["source_path"] != body["raster_path"]
+    assert Path(body["source_path"]).exists()
+
+    # the original upload is served as the colour source
+    status, content_type, blob = _get(server, body["source_url"])
+    assert status == 200 and content_type.startswith("image/")
+    assert blob[:4] == b"\x89PNG"
+
+    # and the page wires that path into the trap
+    assert "fractal.orbit_trap.image" in PAGE and "source_path" in PAGE
