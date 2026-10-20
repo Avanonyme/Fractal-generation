@@ -143,3 +143,48 @@ def test_grain_is_seeded_and_mean_preserving(tmp_path: Path):
     second = [np.asarray(frame, dtype=float) for frame in grain(store, {"seed": 5}, context)]
     assert all(np.array_equal(a, b) for a, b in zip(first, second))
     assert abs(first[0].mean() - rendered.rgb.mean()) < 1.0
+
+
+def test_flicker_puts_stars_on_the_fractal(tmp_path: Path):
+    """Sparkles must sit on the fractal body, not speckle the whole frame."""
+    from scipy import ndimage
+
+    from fractalgen import build_colormap
+    from fractalgen.animations import AnimationContext, flicker
+    from fractalgen.frames import FrameStore
+
+    config = _config(tmp_path, video={"fps": 10, "frames": 8, "animations": []})
+    rendered = render_image(config)
+    context = AnimationContext(
+        config=config, image=rendered.fractal, cmap=build_colormap(config.colour, tmp_path), frames=8, fps=10
+    )
+    frames = [
+        np.asarray(frame, dtype=float)
+        for frame in flicker(FrameStore.repeat(rendered.rgb, 8), {"seed": 3}, context)
+    ]
+    delta = np.abs(frames[4] - rendered.rgb.astype(float)).max(axis=2)
+    lit = delta > 6
+    assert lit.any(), "the effect changed nothing"
+    body = np.asarray(ndimage.binary_dilation(rendered.fractal.boundary, iterations=3), dtype=bool)
+    assert bool((lit & body).sum()) / max(1, int(lit.sum())) > 0.85
+    # points, not blobs: the lit area stays sparse (small frames amplify the share)
+    assert lit.mean() < 0.12
+
+
+def test_grain_and_alpha_do_not_darken(tmp_path: Path):
+    from fractalgen import build_colormap
+    from fractalgen.animations import AnimationContext, alpha, grain
+    from fractalgen.frames import FrameStore
+
+    config = _config(tmp_path, video={"fps": 10, "frames": 6, "animations": []})
+    rendered = render_image(config)
+    cmap = build_colormap(config.colour, tmp_path)
+    context = AnimationContext(config=config, image=rendered.fractal, cmap=cmap, frames=6, fps=10)
+    store = FrameStore.repeat(rendered.rgb, 6)
+    base = rendered.rgb.astype(float).mean()
+
+    grained = [np.asarray(frame, dtype=float) for frame in grain(store, {"seed": 3}, context)]
+    assert abs(grained[-1].mean() - base) < 1.0, "grain must not shift the mean"
+
+    faded = [np.asarray(frame, dtype=float) for frame in alpha(store, {}, context)]
+    assert faded[-1].mean() > 0.9 * base, "alpha must not end on a black frame"

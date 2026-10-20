@@ -216,19 +216,24 @@ Unknown effect parameters are rejected.
 
 | effect | parameters (defaults) |
 | --- | --- |
-| `alpha` | `fade_in` 0, `fade_out` 0, `min_alpha` 60, `max_alpha` 230 |
+| `alpha` | `fade_in` 0 (auto), `fade_out` 0 (none), `min_alpha` 60, `max_alpha` 230 |
 | `pulse` | `beta` auto, `decal` 0, `oscillation_frequency` π, `oscillation_amplitude` 1.0, `speed` auto |
-| `flicker` | `amplitude` 0.9, `percentage` 0.008, `clusters` 8, `speed` 2.0, `blob_size` 0.005, `sharpen` 2.5, `edge_width` 3, `on_fractal` false, `luminance_weight` 0.8, `mode` additive, `seed` |
-| `grain` | `amount` 0.15, `grain_size` 0.003, `octaves` 2, `keyframes` 8, `speed` 0.9, `vignette` 0.0, `seed` |
+| `flicker` | `amplitude` 1.0, `percentage` 0.02, `clusters` 12, `speed` 2.5, `blob_size` 0.0022, `sharpen` 4.0, `edge_width` 2, `on_fractal` true, `luminance_weight` 0.5, `mode` additive, `seed` |
+| `grain` | `amount` 0.18, `grain_size` 0.003, `octaves` 2, `keyframes` 8, `speed` 0.9, `vignette` 0.0, `seed` |
 | `explosion` | `speed` 45, `hold_ratio` 0.2, `seed` |
 | `zoom` | `zoom_factor` 1.15, `oversample` 2 (see *Deep zoom*) |
 | `translate` | `init_damping` [0.4, -0.5], `end_damping` [1.35, 0.85] |
 | `shading` | `rotations` 1.0 |
 
-`flicker` adds light scaled by the remaining head-room (so glints never clip),
-targets mid-tones (where added light is visible) and never re-normalises, so the
-overall exposure stays flat. `grain` is multi-octave smooth noise that boils
-through correlated key fields: film grain rather than TV static.
+`flicker` draws *star points on the fractal*: the sparkle mask is clipped to the
+fractal body (dilated by `edge_width`), the blobs are 1-2 px wide, each cluster
+pulses with its own period and `sharpen` controls how brief the flash is. Light is
+added scaled by the remaining head-room and never re-normalised, so the exposure
+stays flat. `grain` is multi-octave smooth noise that boils through correlated key
+fields, and its delta is scaled by `min(pixel, 255-pixel)`, so it is zero-mean and
+cannot clip (a multiplicative grain pulls bright frames down, which is what made
+animations look like they were darkening). `alpha` no longer fades out unless you
+ask, and a fully revealed frame is fully opaque.
 
 ## Image import (palette + map modifier)
 

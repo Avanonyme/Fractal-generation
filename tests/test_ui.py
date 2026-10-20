@@ -324,3 +324,28 @@ def test_import_image_with_spaces_in_the_name(server: str):
     assert body["colours"]
     assert "@" not in body["raster_url"]
     assert " " not in body["raster_url"]
+
+
+def test_import_returns_a_server_path_and_the_render_accepts_a_url(server: str):
+    import base64
+    import io
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (40, 40), (90, 140, 200)).save(buffer, format="PNG")
+    status, body = _post(
+        server,
+        "/api/from-image",
+        {"filename": "blue sky.png", "data": base64.b64encode(buffer.getvalue()).decode(), "colours": 3},
+    )
+    assert status == 200, body
+    assert body["raster_path"].startswith("/")
+    assert Path(body["raster_path"]).is_file()
+
+    # The page may hand back a URL for the same asset; the server must resolve it.
+    url = f"{server}{body['raster_url']}"
+    config = _tiny_config()
+    config["fractal"]["map"] = {"image": url, "strength": 1.2, "size": 32, "blend": 0.8}
+    config["fractal"]["orbit_trap"] = {"image": url, "size": 32, "distance_mode": 1}
+    status, payload = _post(server, "/api/render", {"form": "image", "config": config})
+    assert status == 200, payload
+    assert payload["ok"] is True

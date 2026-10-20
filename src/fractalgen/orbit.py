@@ -59,11 +59,17 @@ class OrbitTrap:
         """
         values = np.asarray(bitmap, dtype=np.float64)
         if values.size == 0:
-            raise ValueError("orbit trap bitmap is empty")
+            from .config import ConfigError
+
+            raise ConfigError("orbit_trap: the bitmap is empty")
         threshold = float(np.median(values))
         inside = values > threshold
-        if inside.all() or not inside.any():
-            raise ValueError("orbit trap bitmap has no distinguishable shape (all pixels on one side of the median)")
+        if not inside.any() or inside.all():
+            # A flat image has no silhouette. Fall back to its (inverted) luminance
+            # so a plain upload still renders instead of failing the whole request.
+            span = float(values.max() - values.min())
+            smooth = (values - values.min()) / span if span > 0 else np.zeros_like(values)
+            return cls(1.0 - smooth, mode)
         distance = np.asarray(ndimage.distance_transform_edt(np.logical_not(inside)), dtype=np.float64)
         scale = float(distance.max())
         return cls(distance / scale if scale > 0 else distance, mode)

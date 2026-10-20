@@ -626,6 +626,25 @@ def _resolve_output(name: str) -> Path:
     return path
 
 
+def _localise_urls(value: Any) -> Any:
+    """Map ``http://127.0.0.1:PORT/outputs/<name>`` strings back to local paths.
+
+    The page shows assets through URLs, so a config built in the browser can end
+    up with a URL where the renderer expects a path. Only URLs that point at this
+    server's output directory are rewritten.
+    """
+    if isinstance(value, Mapping):
+        return {key: _localise_urls(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_localise_urls(item) for item in value]
+    if isinstance(value, str) and "://" in value and "/outputs/" in value:
+        name = value.split("/outputs/", 1)[1].split("?", 1)[0].split("/")[0]
+        candidate = _OUTPUT_DIR / name
+        if name and candidate.is_file():
+            return str(candidate)
+    return value
+
+
 def _render(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Validate, render and return the served URL."""
     form = str(payload.get("form", "image"))
@@ -636,7 +655,7 @@ def _render(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise ConfigError("config: expected a configuration object")
 
-    data = json.loads(json.dumps(raw))  # deep copy of plain JSON
+    data = _localise_urls(json.loads(json.dumps(raw)))  # deep copy of plain JSON
     data["form"] = form
 
     codec = "gif"
@@ -726,6 +745,8 @@ def import_image(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
         "colours": list(analysis.colours),
+        "raster_path": str(raster_path),
+        "palette_path": str(palette_path),
         "raster_url": f"/outputs/{_safe_name(raster_path.name)}",
         "palette_url": f"/outputs/{_safe_name(palette_path.name)}",
         "size": list(analysis.source_size),
@@ -1276,7 +1297,7 @@ async function uploadImage(file) {
     if (!payload.ok) throw new Error(payload.error || 'analysis failed');
     set('colour.mode', 'colors');
     set('colour.colors', payload.colours);
-    const raster = new URL(payload.raster_url, location.origin).href;
+    const raster = payload.raster_path || payload.raster_url;
     set('fractal.map.image', raster);
     set('fractal.map.strength', 1.4);
     set('fractal.orbit_trap.image', raster);

@@ -92,7 +92,9 @@ def alpha(frames: FrameStore, params: Mapping[str, Any], context: AnimationConte
     image_config: ImageConfig = context.config.image
     total = len(frames)
     fade_in = as_int(options["fade_in"], "alpha.fade_in") or max(1, total // 12)
-    fade_out = as_int(options["fade_out"], "alpha.fade_out") or max(1, total // 24)
+    # No automatic fade-out: it used to end the animation on a black frame, which
+    # reads as "the gif goes dark".
+    fade_out = as_int(options["fade_out"], "alpha.fade_out")
     low = as_int(options["min_alpha"], "alpha.min_alpha")
     high = as_int(options["max_alpha"], "alpha.max_alpha")
     boundary = _resize_mask(context.boundary, size)
@@ -109,9 +111,11 @@ def alpha(frames: FrameStore, params: Mapping[str, Any], context: AnimationConte
         else:
             weight = np.full((size, size), 255.0)
 
-        weight = np.where(boundary, np.clip(weight, low, high), np.clip(weight, low + 40, high)) * (
-            image_config.alpha / 255.0
-        )
+        # The clamp only applies while fading: a fully revealed frame must be
+        # fully opaque, otherwise the whole animation sits ~10 % darker than the
+        # still image (which reads as "the gif goes dark").
+        faded = np.where(boundary, np.clip(weight, low, high), np.clip(weight, low + 40, high))
+        weight = np.where(weight >= 255.0, 255.0, faded) * (image_config.alpha / 255.0)
         output.append(compose_over(frame, background, weight))
     return output
 
@@ -179,24 +183,26 @@ def pulse(frames: FrameStore, params: Mapping[str, Any], context: AnimationConte
 # --------------------------------------------------------------------------- #
 FLICKER_DEFAULTS: dict[str, Any] = {
     #: Peak brightness added to a twinkling pixel, as a fraction of its head-room.
-    "amplitude": 0.9,
-    #: Share of the frame covered by the sparkle field (0.01 = 1 %).
-    "percentage": 0.008,
-    #: Number of independent twinkling regions.
-    "clusters": 8,
+    "amplitude": 1.0,
+    #: Share of the frame covered by the sparkle field. Points are tiny, so this
+    #: is the share of *sparkle* pixels before they are clipped to the fractal.
+    "percentage": 0.02,
+    #: Number of independent twinkling groups; each has its own period and phase.
+    "clusters": 12,
     #: Twinkle cycles over the whole animation (per cluster, scaled randomly).
-    "speed": 2.0,
-    #: Sparkle blob size relative to the frame (Gaussian sigma).
-    "blob_size": 0.005,
-    #: Pulse sharpening: 1 = slow swell, 3 = short glints, >4 = strobe.
-    "sharpen": 2.5,
-    #: Grow the fractal mask by this many pixels so highlights hug the filaments.
-    "edge_width": 3,
-    #: Restrict twinkling to the fractal body.
-    "on_fractal": False,
+    "speed": 2.5,
+    #: Sparkle size relative to the frame: ~0.002 is a 1-2 px star at 800 px.
+    "blob_size": 0.0022,
+    #: Pulse sharpening: 1 = slow swell, 4 = short star-like glints.
+    "sharpen": 4.0,
+    #: Grow the fractal mask by this many pixels so stars sit on the filaments.
+    "edge_width": 2,
+    #: Restrict twinkling to the fractal body (this is what makes them "stars on
+    #: the fractal" instead of speckle all over the frame).
+    "on_fractal": True,
     #: 0 = uniform twinkling, 1 = mid-tones only (the brightest pixels cannot
     #: brighten any further, and black basins swallow the glow).
-    "luminance_weight": 0.8,
+    "luminance_weight": 0.5,
     #: "additive" adds light (default); "multiply" keeps the historical look.
     "mode": "additive",
     "seed": None,
@@ -204,12 +210,13 @@ FLICKER_DEFAULTS: dict[str, Any] = {
 
 
 def _soft_blobs(size: int, coverage: float, sigma: float, rng: np.random.Generator) -> np.ndarray:
-    """Sparse, rounded mask covering roughly ``coverage`` of the frame.
+    """Sparse point mask covering roughly ``coverage`` of the frame.
 
-    Thresholding *smooth* noise (instead of picking isolated pixels) is what
-    turns the effect from TV static into visible glints.
+    A lightly smoothed noise field, thresholded high, gives isolated stars; the
+    previous defaults used a large sigma and low threshold, which produced soft
+    blobs spread over the whole frame.
     """
-    noise = ndimage.gaussian_filter(rng.standard_normal((size, size)), sigma=max(0.6, sigma), mode="reflect")
+    noise = ndimage.gaussian_filter(rng.standard_normal((size, size)), sigma=max(0.45, sigma), mode="reflect")
     threshold = np.quantile(noise, 1.0 - min(max(coverage, 1e-6), 0.9))
     return noise >= threshold
 
@@ -298,8 +305,9 @@ def flicker(frames: FrameStore, params: Mapping[str, Any], context: AnimationCon
 # grain: animated film grain
 # --------------------------------------------------------------------------- #
 GRAIN_DEFAULTS: dict[str, Any] = {
-    #: Luminance modulation strength; 0.15 means roughly +/- 15 %.
-    "amount": 0.15,
+    #: Luminance modulation strength; 0.18 means roughly +/- 18 % of the
+    #: available head-room, so bright frames cannot clip and go dark.
+    "amount": 0.18,
     #: Grain scale relative to the frame (0.003 = 3 px at 1000 px, scale-free).
     "grain_size": 0.003,
     #: Number of noise octaves; more octaves = richer texture.
@@ -392,8 +400,12 @@ def grain(frames: FrameStore, params: Mapping[str, Any], context: AnimationConte
         pixels = np.asarray(frame, dtype=np.float64)
         if pixels.ndim == 2:
             pixels = np.stack([pixels] * 3, axis=-1)
-        modulation = (1 + amount * (2 * noise - 1)) * shade
-        output.append(to_uint8(np.clip(pixels * modulation[..., None], 0, 255)))
+        # Additive, scaled by the head-room on each side: a multiplicative grain
+        # clips the highlights (which pulls the mean down, i.e. the animation
+        # darkens) whereas this is exactly zero-mean and can never clip.
+        span = np.minimum(pixels, 255.0 - pixels)
+        grain_delta = amount * (2.0 * noise[..., None] - 1.0) * span
+        output.append(to_uint8(pixels + grain_delta * shade[..., None]))
     return output
 
 
