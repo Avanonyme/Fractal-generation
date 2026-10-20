@@ -177,9 +177,20 @@ def build_colormap(config: ColourConfig | None = None, base_dir: Path | str | No
     from matplotlib import colormaps
 
     if config.mode == "matplotlib":
-        if config.name not in colormaps:
-            raise ConfigError(f"colour.name: unknown matplotlib colormap {config.name!r}")
-        return colormaps[config.name]
+        if config.name in colormaps:
+            return colormaps[config.name]
+        # The UI offers one catalogue of matplotlib colormaps and seaborn
+        # palettes; accept a seaborn name here instead of rejecting it.
+        if optional.available("seaborn"):
+            try:
+                import seaborn as sns
+
+                return _listed(sns.color_palette(config.name).as_hex(), config)
+            except ValueError:
+                pass
+        raise ConfigError(
+            f"colour.name: unknown colormap {config.name!r} (it is neither a matplotlib colormap nor a seaborn palette)"
+        )
 
     if config.mode == "seaborn":
         optional.require("seaborn")

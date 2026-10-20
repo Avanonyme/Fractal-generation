@@ -19,7 +19,8 @@ import pytest
 from PIL import Image
 
 from fractalgen import ui
-from fractalgen.config import Config
+from fractalgen.config import Config, ConfigError
+from fractalgen.ui import PAGE, _OUTPUT_DIR, _render, build_schema, import_image
 
 
 @pytest.fixture(scope="module")
@@ -201,3 +202,93 @@ def test_cli_ui_subcommand_is_wired():
     assert arguments.command == "ui"
     assert arguments.port == 0
     assert arguments.host == "127.0.0.1"
+
+
+def test_schema_labels_are_unique_and_choices_are_labelled():
+    schema = build_schema()
+    labels = [field["label"] for field in schema["fields"]]
+    assert len(labels) == len(set(labels)), "two controls share a label"
+    # the two "smooth" knobs must be distinguishable
+    assert any("Shading" in label and "smooth" in label for label in labels)
+    mode = next(field for field in schema["fields"] if field["path"] == "colour.mode")
+    assert all(isinstance(choice, list) and len(choice) == 2 for choice in mode["choices"])
+    assert ["accents", "Extract from an image + accents"] in mode["choices"]
+
+
+def test_schema_colour_name_lists_real_colormaps():
+    schema = build_schema()
+    name = next(field for field in schema["fields"] if field["path"] == "colour.name")
+    values = [choice[0] for choice in name["choices"]]
+    assert "viridis" in values and "rocket" in values and len(values) > 50
+
+
+def test_video_sections_are_form_scoped():
+    sections = {section["id"]: section for section in build_schema()["sections"]}
+    assert sections["video"]["forms"] == ["video"]
+    assert sections["image"]["forms"] == ["image", "video"]
+    assert sections["colour"]["forms"] == ["image", "video"]
+
+
+def test_mp4_falls_back_to_gif_without_ffmpeg():
+    from fractalgen import optional
+
+    config = {
+        "fractal": {"size": 32, "iterations": 6, "polynomial": {"mode": "roots", "roots": [[1, 0], [-1, 0], [0, 1]]}},
+        "video": {"fps": 4, "frames": 2, "codec": "mp4", "animations": ["alpha"]},
+    }
+    result = _render({"form": "video", "config": config})
+    if optional.available("mp4"):
+        assert result["codec"] == "mp4"
+        assert result["url"].endswith(".mp4")
+    else:
+        assert result["codec"] == "gif"
+        assert result["url"].endswith(".gif")
+        assert (Path(_OUTPUT_DIR) / result["filename"]).exists()
+
+
+def test_unsupported_upload_format_has_a_helpful_message(tmp_path):
+    import base64
+
+    payload = {"filename": "photo.heic", "data": base64.b64encode(b"definitely not an image").decode()}
+    with pytest.raises(ConfigError) as error:
+        import_image(payload)
+    assert "unsupported image format" in str(error.value)
+    assert "JPEG or PNG" in str(error.value)
+
+
+def test_preview_offers_a_download():
+    assert "download:" in PAGE
+    assert "Download ${name}" in PAGE
+
+
+def test_outputs_endpoint_lists_renders(server: str):
+    status, payload = _post(server, "/api/render", {"form": "image", "config": _tiny_config()})
+    assert status == 200
+    listing = json.loads(_get(server, "/api/outputs")[2])["outputs"]
+    assert any(entry["name"] == payload["filename"] for entry in listing)
+    entry = next(item for item in listing if item["name"] == payload["filename"])
+    assert entry["url"] == payload["url"]
+    assert entry["kind"] == "image"
+    assert entry["bytes"] > 0
+
+
+def test_outputs_endpoint_is_traversal_safe(server: str):
+    listing = json.loads(_get(server, "/api/outputs")[2])["outputs"]
+    assert all("/" not in entry["name"] and ".." not in entry["name"] for entry in listing)
+
+
+def _tiny_config() -> dict:
+    return {
+        "fractal": {
+            "size": 32,
+            "iterations": 8,
+            "polynomial": {"mode": "roots", "roots": [[1, 0], [-1, 0], [0, 1]]},
+        },
+        "colour": {"mode": "matplotlib", "name": "viridis"},
+    }
+
+
+def test_page_has_an_outputs_picker():
+    assert 'id="outputs"' in PAGE
+    assert "refreshOutputs" in PAGE
+    assert "/api/outputs" in PAGE

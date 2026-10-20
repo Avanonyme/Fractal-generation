@@ -52,6 +52,7 @@ from .config import (
     PostprocessConfig,
     ShadingConfig,
 )
+from . import optional
 from .image_import import analyse_image, write_assets
 from .pipeline import render_image, render_video
 from .postprocess import PARAMS as POSTPROCESS_PARAMS
@@ -105,7 +106,13 @@ class Field:
         if self.default is not None or self.kind not in ("list", "path"):
             payload["default"] = self.default
         if self.choices:
-            payload["choices"] = [list(choice) if isinstance(choice, tuple) else choice for choice in self.choices]
+            labels = _CHOICE_LABELS.get(self.path, {})
+            payload["choices"] = [
+                [choice[0], labels.get(str(choice[0]), choice[1])]
+                if isinstance(choice, tuple) and len(choice) == 2
+                else [choice, labels.get(str(choice), str(choice).replace("_", " "))]
+                for choice in self.choices
+            ]
         for name in ("minimum", "maximum", "step"):
             value = getattr(self, name)
             if value is not None:
@@ -121,6 +128,88 @@ class Field:
         return payload
 
 
+def _catalogue() -> tuple[tuple[str, str], ...]:
+    """Every colormap name the renderer can actually resolve."""
+    from matplotlib import colormaps
+
+    names = set(colormaps)
+    try:  # seaborn palettes are only valid for colour.mode='seaborn'
+        import seaborn as sns
+
+        names.update(sns.color_palette(None).__class__.__module__ and [])
+        names.update(
+            {
+                "rocket",
+                "mako",
+                "flare",
+                "crest",
+                "icefire",
+                "vlag",
+                "Spectral",
+                "RdYlGn",
+                "deep",
+                "muted",
+                "pastel",
+                "bright",
+                "dark",
+                "colorblind",
+            }
+        )
+    except ImportError:
+        pass
+    return tuple((name, name) for name in sorted(names))
+
+
+#: enum value -> display label, so the UI is readable ("extract from image").
+_CHOICE_LABELS: dict[str, dict[str, str]] = {
+    "colour.mode": {
+        "matplotlib": "Built-in colormap",
+        "seaborn": "Seaborn palette",
+        "colors": "Custom colours",
+        "accents": "Extract from an image + accents",
+    },
+    "image.return_type": {
+        "smooth": "Smooth (basin hue, no rings)",
+        "iteration": "Iteration bands (rings, debanded)",
+        "iteration-steps": "Iteration steps (raw bands)",
+        "root": "Root identity (flat basins)",
+        "roots": "Distance to root (smooth gradient)",
+        "distance": "Orbit-trap distance",
+        "boundary": "Fractal boundary mask",
+    },
+    "image.shading.type": {
+        "matplotlib": "Hillshade (LightSource)",
+        "fossil": "Fossil (plateau light)",
+        "blinn-phong": "Blinn-Phong (specular)",
+        "none": "No shading",
+    },
+    "image.shading.height": {
+        "auto": "Auto (trap, else distance to root)",
+        "roots": "Distance to root",
+        "iteration": "log(1 + iteration count)",
+        "iteration-steps": "Raw iteration count",
+        "distance": "Orbit-trap distance",
+    },
+    "fractal.method": {"newton": "Newton (quadratic)", "halley": "Halley (cubic)"},
+    "fractal.variant": {"standard": "Standard (start at pixel)", "nova": "Nova (per-pixel polynomial)"},
+    "fractal.polynomial.mode": {
+        "random": "Random polynomial",
+        "roots": "Explicit roots",
+        "coefs": "Explicit coefficients",
+        "taylor": "Taylor series of a function",
+    },
+    "fractal.map.mode": {"damping": "Damping (strong)", "warp": "Warp (subtle)"},
+    "video.codec": {"gif": "GIF", "mp4": "MP4 (needs imageio-ffmpeg)"},
+    "colour.accent": {
+        "complementary": "Complementary",
+        "triadic": "Triadic",
+        "analogous": "Analogous",
+        "split-complementary": "Split complementary",
+        "tetradic": "Tetradic",
+        "shades": "Shades",
+    },
+}
+
 #: path -> enum choices, taken from the config classes so they cannot drift.
 _CHOICES: dict[str, tuple[Any, ...]] = {
     "form": ("image", "video"),
@@ -132,6 +221,7 @@ _CHOICES: dict[str, tuple[Any, ...]] = {
     "fractal.map.mode": MapConfig.MODES,
     "colour.mode": ColourConfig.MODES,
     "colour.accent": ColourConfig.ACCENTS,
+    "colour.name": _catalogue(),
     "image.return_type": ImageConfig.RETURN_TYPES,
     "image.shading.type": ShadingConfig.TYPES,
     "image.shading.height": ShadingConfig.HEIGHTS,
@@ -327,9 +417,41 @@ def _kind_for(path: str, value: Any) -> str:
     return "string"
 
 
+_SECTION_TITLE_BY_ID = {
+    "general": "General",
+    "fractal": "Fractal",
+    "colour": "Colour",
+    "image": "Image",
+    "postprocess": "Post-process",
+    "video": "Video",
+    "runtime": "Runtime",
+}
+
+_FIELD_TITLES = {
+    "fractal.polynomial": "Polynomial",
+    "fractal.orbit_trap": "Orbit trap",
+    "fractal.map": "Map",
+    "image.shading": "Shading",
+    "fractal.domain": "Domain",
+}
+
+
 def _label_for(path: str) -> str:
-    leaf = path.split(".")[-1]
-    return leaf.replace("_", " ").replace("[].", " ").strip().capitalize()
+    """Human label that is unique: ``Section · parent · leaf``.
+
+    Two fields used to render as "smooth" (image and shading); prefixing the
+    parent path keeps every label distinct.
+    """
+    parts = path.replace("[]", "").split(".")
+    group = "postprocess" if path.startswith("image.postprocess") else parts[0]
+    prefix = _SECTION_TITLE_BY_ID.get(group, group.title())
+    parents = []
+    for index in range(1, len(parts) - 1):
+        segment = parts[index]
+        parents.append(_FIELD_TITLES.get(".".join(parts[: index + 1]), segment.replace("_", " ").title()))
+    leaf = parts[-1].replace("_", " ")
+    parts_text = " · ".join([prefix, *parents, leaf])
+    return parts_text.replace("[].", " ").strip()
 
 
 def _item_schema(path: str) -> Mapping[str, Any] | None:
@@ -427,7 +549,10 @@ def build_schema() -> dict[str, Any]:
             seen.add(extra.path)
 
     return {
-        "sections": [{"id": identifier, "title": title} for identifier, title in _SECTIONS],
+        "sections": [
+            {"id": identifier, "title": title, "forms": _SECTION_FORMS.get(identifier, ["image", "video"])}
+            for identifier, title in _SECTIONS
+        ],
         "fields": [entry.to_dict() for entry in fields],
         "defaults": defaults,
         "animations": list(AnimationConfig.NAMES),
@@ -442,6 +567,9 @@ def _section_title(identifier: str) -> str:
 
 
 _SECTION_TITLES = dict(_SECTIONS)
+
+#: which render form a section applies to (the UI hides the rest).
+_SECTION_FORMS: dict[str, list[str]] = {"video": ["video"], "postprocess": ["image", "video"]}
 
 
 # --------------------------------------------------------------------------- #
@@ -488,9 +616,15 @@ def _render(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     data = json.loads(json.dumps(raw))  # deep copy of plain JSON
     data["form"] = form
-    suffix = ".gif" if form == "video" and data.get("video", {}).get("codec", "gif") == "gif" else (
-        ".mp4" if form == "video" else ".png"
-    )
+
+    codec = "gif"
+    if form == "video":
+        requested = str(data.get("video", {}).get("codec", "gif"))
+        # imageio needs imageio-ffmpeg for MP4; fall back instead of failing the
+        # request with imageio's cryptic "TiffWriter.write() got fps".
+        codec = requested if requested == "gif" or optional.available("mp4") else "gif"
+        data.setdefault("video", {})["codec"] = codec
+    suffix = ".gif" if form == "video" and codec == "gif" else (".mp4" if form == "video" else ".png")
     target = _OUTPUT_DIR / f"fractal-{int(time.time() * 1000)}{suffix}"
     data["output"] = str(target)
 
@@ -505,7 +639,14 @@ def _render(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not target.exists():
         raise ConfigError("render produced no file")
 
-    return {"ok": True, "url": f"/outputs/{target.name}", "elapsed": round(elapsed, 3), "form": form}
+    return {
+        "ok": True,
+        "url": f"/outputs/{target.name}",
+        "elapsed": round(elapsed, 3),
+        "form": form,
+        "codec": codec,
+        "filename": target.name,
+    }
 
 
 def render_request(payload: Mapping[str, Any], timeout: float = RENDER_TIMEOUT_SECONDS) -> dict[str, Any]:
@@ -544,7 +685,19 @@ def import_image(payload: Mapping[str, Any]) -> dict[str, Any]:
     source = uploads / name
     source.write_bytes(blob)
 
-    analysis = analyse_image(source, colours=int(payload.get("colours", 6)), raster_size=int(payload.get("raster_size", 96)))
+    try:
+        analysis = analyse_image(
+            source,
+            colours=int(payload.get("colours", 6)),
+            raster_size=int(payload.get("raster_size", 96)),
+        )
+    except ConfigError as error:
+        if "cannot identify image file" in str(error):
+            raise ConfigError(
+                f"{name}: unsupported image format - convert it to JPEG or PNG "
+                "(HEIC/HEIF needs 'pip install pillow-heif'); details: {error}"
+            ) from error
+        raise
     stem = f"{Path(name).stem}-assets"
     raster_path, palette_path = write_assets(analysis, _OUTPUT_DIR, stem=stem)
 
@@ -562,6 +715,39 @@ def import_image(payload: Mapping[str, Any]) -> dict[str, Any]:
             },
         },
     }
+
+
+def list_outputs(limit: int = 40) -> list[dict[str, Any]]:
+    """Recent renders in the output directory, newest first.
+
+    The UI shows them in an "outputs" picker so a render is not lost when the
+    preview is replaced (or when the page is reloaded).
+    """
+    if not _OUTPUT_DIR.is_dir():
+        return []
+    entries: list[tuple[float, Path]] = []
+    for path in _OUTPUT_DIR.iterdir():
+        if not path.is_file() or not _SAFE_NAME.match(path.name):
+            continue
+        if path.suffix.lower() not in (".png", ".gif", ".mp4", ".webm", ".json"):
+            continue
+        try:
+            entries.append((path.stat().st_mtime, path))
+        except OSError:  # pragma: no cover - file vanished mid-scan
+            continue
+    entries.sort(reverse=True)
+    listed = []
+    for modified, path in entries[:limit]:
+        listed.append(
+            {
+                "name": path.name,
+                "url": f"/outputs/{path.name}",
+                "bytes": path.stat().st_size,
+                "modified": int(modified),
+                "kind": "video" if path.suffix.lower() in (".gif", ".mp4", ".webm") else "image",
+            }
+        )
+    return listed
 
 
 # --------------------------------------------------------------------------- #
@@ -630,6 +816,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(HTTPStatus.OK, PAGE.encode("utf-8"), "text/html; charset=utf-8")
             elif route == "/api/schema":
                 self._json(HTTPStatus.OK, build_schema())
+            elif route == "/api/outputs":
+                self._json(HTTPStatus.OK, {"outputs": list_outputs()})
             elif route == "/api/health":
                 self._json(HTTPStatus.OK, {"ok": True, "outputs": str(_OUTPUT_DIR)})
             elif route.startswith("/outputs/"):
@@ -735,6 +923,9 @@ PAGE = r"""<!doctype html>
   #status { color:var(--muted); font-size:12px; min-height:16px; }
   #preview { flex:1; display:grid; place-items:center; border:1px solid var(--line); border-radius:10px; background:#0b0e12; min-height:340px; overflow:hidden; }
   #preview img { max-width:100%; max-height: calc(100vh - 190px); display:block; }
+  #preview { grid-auto-rows: min-content; align-content: center; gap: 10px; }
+  #preview .download { justify-self: center; color: var(--accent, #6ee7ff); font-size: 12.5px; text-decoration: none; border: 1px solid var(--line); padding: 6px 12px; border-radius: 8px; }
+  #preview .download:hover { background: #131820; }
   #swatches { display:flex; height:26px; border-radius:6px; overflow:hidden; border:1px solid var(--line); }
   #swatches span { flex:1; }
   .listRow { border:1px dashed var(--line); border-radius:6px; padding:7px; display:grid; gap:6px; }
@@ -761,6 +952,10 @@ PAGE = r"""<!doctype html>
       <label style="color:var(--muted);font-size:12px">form
         <select id="form" style="width:auto;margin-left:4px"><option value="image">image</option><option value="video">video</option></select>
       </label>
+      <label style="color:var(--muted);font-size:12px">outputs
+        <select id="outputs" style="width:auto;margin-left:4px;max-width:220px"><option value="">(none yet)</option></select>
+      </label>
+      <button id="open-output" title="show the selected output">Open</button>
       <span id="status"></span>
     </div>
     <div id="swatches"></div>
@@ -825,8 +1020,11 @@ function control(field) {
     input.checked = Boolean(value);
     input.addEventListener('change', () => onChange(input.checked));
   } else if (field.kind === 'enum') {
-    input = el('select', {}, field.choices.map((choice) => el('option', { value: String(choice), text: String(choice) })));
-    input.value = String(value ?? field.choices[0]);
+    input = el('select', {}, field.choices.map((choice) => {
+      const [choiceValue, choiceLabel] = Array.isArray(choice) ? choice : [choice, choice];
+      return el('option', { value: String(choiceValue), text: String(choiceLabel) });
+    }));
+    input.value = String(value ?? (Array.isArray(field.choices[0]) ? field.choices[0][0] : field.choices[0]));
     input.addEventListener('change', () => onChange(input.value));
   } else if (field.kind === 'complex') {
     const pair = Array.isArray(value) ? value : [1, 0];
@@ -940,10 +1138,14 @@ function buildControls() {
   root.replaceChildren();
   // form selector drives the request; keep it in the toolbar, not the form
   const order = ['general', 'fractal', 'colour', 'image', 'postprocess', 'video', 'runtime'];
+  const form = $('#form').value;
   for (const section of order) {
     const fields = bySection.get(section);
     if (!fields || !fields.length) continue;
-    const title = (state.schema.sections.find((s) => s.id === section) || {}).title || section;
+    const meta = state.schema.sections.find((s) => s.id === section) || {};
+    // Image renders have no timeline: hide video/animation controls entirely.
+    if (Array.isArray(meta.forms) && !meta.forms.includes(form)) continue;
+    const title = meta.title || section;
     const details = el('details', { open: section !== 'runtime' && section !== 'video' }, [el('summary', { text: title })]);
     const body = el('div', { class: 'fields' });
     for (const field of fields) {
@@ -969,13 +1171,40 @@ function renderSwatches() {
   holder.appendChild(el('span', { style: 'background:linear-gradient(90deg,#440154,#3b528b,#21918c,#5ec962,#fde725)', title: name }));
 }
 
-function showPreview(url, form) {
+function showPreview(url, form, filename) {
   const holder = $('#preview');
   holder.replaceChildren();
-  if (form === 'video') {
-    holder.appendChild(el('img', { src: url + '?t=' + Date.now(), alt: 'animation' }));
-  } else {
-    holder.appendChild(el('img', { src: url + '?t=' + Date.now(), alt: 'render' }));
+  holder.appendChild(el('img', { src: url + '?t=' + Date.now(), alt: form === 'video' ? 'animation' : 'render' }));
+  // Download the exact bytes the server produced (GIF animates when opened).
+  const name = filename || decodeURIComponent(url.split('/').pop().split('?')[0]);
+  holder.appendChild(el('a', {
+    href: url,
+    download: name,
+    class: 'download',
+    text: `Download ${name}`,
+  }));
+}
+
+async function refreshOutputs(selectName) {
+  const select = $('#outputs');
+  try {
+    const payload = await (await fetch('/api/outputs')).json();
+    const outputs = payload.outputs || [];
+    select.replaceChildren();
+    if (!outputs.length) {
+      select.appendChild(el('option', { value: '', text: '(none yet)' }));
+      return;
+    }
+    for (const entry of outputs) {
+      const label = `${entry.name} · ${(entry.bytes / 1024).toFixed(0)} kB`;
+      select.appendChild(el('option', { value: entry.url, text: label, 'data-form': entry.kind }));
+    }
+    if (selectName) {
+      const match = [...select.options].find((option) => option.value.endsWith(selectName));
+      if (match) select.value = match.value;
+    }
+  } catch (error) {
+    log(`could not list outputs: ${error.message || error}`);
   }
 }
 
@@ -995,7 +1224,8 @@ async function generate() {
     });
     const payload = await response.json();
     if (!payload.ok) throw new Error(payload.error || 'render failed');
-    showPreview(payload.url, form);
+    showPreview(payload.url, form, payload.filename);
+    refreshOutputs(payload.filename);
     const seconds = payload.elapsed ?? (performance.now() - started) / 1000;
     $('#status').textContent = `done in ${Number(seconds).toFixed(2)}s`;
     log(`rendered ${payload.url} in ${Number(seconds).toFixed(2)}s`);
@@ -1044,7 +1274,14 @@ async function boot() {
   state.schema = schema;
   state.config = schema.defaults;
   $('#form').value = state.config.form || 'image';
-  $('#form').addEventListener('change', () => set('form', $('#form').value));
+  $('#form').addEventListener('change', () => { set('form', $('#form').value); buildControls(); });
+  $('#open-output').addEventListener('click', () => {
+    const url = $('#outputs').value;
+    if (!url) return;
+    const option = $('#outputs').selectedOptions[0];
+    showPreview(url, option ? option.dataset.form : 'image', decodeURIComponent(url.split('/').pop()));
+  });
+  refreshOutputs();
 
   const upload = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
   upload.addEventListener('change', () => { if (upload.files[0]) uploadImage(upload.files[0]); });

@@ -80,7 +80,7 @@ def test_build_colormap_modes():
 
 
 def test_build_colormap_rejects_unknown_name():
-    with pytest.raises(ConfigError, match="unknown matplotlib colormap"):
+    with pytest.raises(ConfigError, match="unknown colormap"):
         build_colormap(ColourConfig(name="not-a-colormap"), Path("."))
 
 

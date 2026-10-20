@@ -19,7 +19,7 @@ FEATURE_HINTS = {
     "edges": ("skimage", "fractal-generation[edges]"),
     "palette": ("extcolors", "fractal-generation[palette]"),
     "seaborn": ("seaborn", "fractal-generation[palette]"),
-    "mp4": ("imageio", "fractal-generation[video]"),
+    "mp4": ("imageio_ffmpeg", "fractal-generation[video]"),
 }
 
 
