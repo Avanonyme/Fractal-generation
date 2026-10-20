@@ -58,6 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
     from_image.add_argument("--raster-size", type=int, default=96, help="raster resolution")
     from_image.add_argument("--strength", type=float, default=1.4, help="map-modifier strength")
     from_image.add_argument("--blend", type=float, default=0.8, help="image-space blend (0..1)")
+    from_image.add_argument(
+        "--return-type",
+        default=None,
+        help="colour field: image (blend), trap (orbit-trap colouring), iteration, smooth, ...",
+    )
     from_image.add_argument("--raster-only", action="store_true", help="write the assets, skip the render")
     from_image.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="config override")
     from_image.add_argument("-w", "--workers", type=int, help="worker processes (0 = all cores)")
@@ -184,6 +189,7 @@ def _render_one_image(arguments: argparse.Namespace, base: Config, image: Path, 
         raster_size=arguments.raster_size,
         strength=arguments.strength,
         blend=arguments.blend,
+        return_type=arguments.return_type,
         output=target,
         stem=image.stem,
     )

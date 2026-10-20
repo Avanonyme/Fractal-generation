@@ -218,6 +218,7 @@ def config_from_image(
     blend: float = 0.8,
     output: str | Path | None = None,
     stem: str | None = None,
+    return_type: str | None = None,
 ) -> Config:
     """Return a copy of ``config`` wired to the image's palette, map and trap.
 
@@ -235,10 +236,14 @@ def config_from_image(
     directory = target.parent if target is not None else Path.cwd() / "out"
     raster_path, _ = write_assets(analysis, directory, stem=name)
 
+    # Orbit-trap colouring needs the picture's colours, not its luminance raster.
+    render_type = return_type or config.image.return_type
+    trap_image = source if render_type == "trap" else raster_path
+
     fractal = config.fractal
     mapped = replace(
         fractal,
-        orbit_trap=OrbitTrapConfig(image=raster_path, size=raster_size, distance_mode=1),
+        orbit_trap=OrbitTrapConfig(image=trap_image, size=raster_size, distance_mode=1),
         map=MapConfig(
             image=raster_path,
             strength=as_float(strength, "image.strength"),
@@ -247,6 +252,8 @@ def config_from_image(
         ),
     )
     updated = replace(config, fractal=mapped, colour=analysis.palette)
+    if render_type != config.image.return_type:
+        updated = replace(updated, image=replace(updated.image, return_type=render_type))
     if target is not None:
         updated = replace(updated, output=target)
     return updated
