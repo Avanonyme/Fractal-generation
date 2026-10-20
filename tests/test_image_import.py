@@ -92,6 +92,7 @@ def test_config_from_image_keeps_settings_and_wires_the_map(tmp_path: Path):
     assert config.colour.mode == "colors"
     assert config.fractal.map.enabled
     assert config.fractal.map.strength == pytest.approx(1.2)
+    assert config.fractal.map.blend == pytest.approx(0.8)
     assert config.fractal.orbit_trap.image is not None
     assert Path(config.fractal.orbit_trap.image).exists()
     assert config.output == base.output
@@ -116,6 +117,36 @@ def test_render_shows_the_map(tmp_path: Path):
     assert np.isfinite(result.roots).all()
     raster = _map_raster(str(config.fractal.map.image), config.fractal.map.size)
     assert raster.std() > 0.05
+
+
+def test_blend_makes_the_image_readable(tmp_path: Path):
+    """The image-space blend must dominate the difference with a plain fractal."""
+    from fractalgen.solver import _map_raster
+
+    source = _photo(tmp_path / "photo.png")
+    base = _base_config(tmp_path)
+    mapped = config_from_image(base, source, colours=4, raster_size=48, strength=0.0, blend=0.9)
+
+    plain = render_image(_base_config(tmp_path)).rgb.astype(float).mean(axis=2)
+    blended = render_image(mapped).rgb.astype(float).mean(axis=2)
+    raster = _map_raster(str(mapped.fractal.map.image), mapped.fractal.map.size)
+    # The blend resizes the raster to the frame, so compare on a common grid.
+    from PIL import Image
+
+    raster = np.asarray(
+        Image.fromarray((raster * 255).astype(np.uint8)).resize(blended.shape[::-1], Image.Resampling.BICUBIC),
+        dtype=float,
+    ) / 255.0
+
+    def correlation(a: np.ndarray, b: np.ndarray) -> float:
+        a = (a - a.mean()) / (a.std() or 1.0)
+        b = (b - b.mean()) / (b.std() or 1.0)
+        return float((a * b).mean())
+
+    plain_correlation = abs(correlation(raster, plain))
+    blended_correlation = correlation(raster, blended)
+    assert blended_correlation > 0.55
+    assert blended_correlation > plain_correlation
 
 
 def test_cli_from_image_end_to_end(tmp_path: Path):

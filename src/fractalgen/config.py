@@ -428,6 +428,11 @@ class MapConfig:
     #: linear and gentle, it nudges the pattern without flattening anything, so a
     #: photo only faintly shows through.
     mode: str = "damping"
+    #: 0..1: how strongly the frame's brightness follows the image itself. The
+    #: dynamical coupling above reshapes the basins, but a Newton orbit only ever
+    #: visits a small part of the plane, so the picture is faint there; blending
+    #: the raster into the frame (in image space) is what makes it readable.
+    blend: float = 0.0
 
     MODES = ("warp", "damping")
 
@@ -436,25 +441,29 @@ class MapConfig:
             raise ConfigError(f"fractal.map.mode: expected one of {list(self.MODES)}, got {self.mode!r}")
         if self.strength < 0:
             raise ConfigError("fractal.map.strength: must be >= 0")
+        if not 0.0 <= self.blend <= 1.0:
+            raise ConfigError("fractal.map.blend: must be within 0..1")
         if self.size < 8:
             raise ConfigError("fractal.map.size: must be >= 8")
 
     @property
     def enabled(self) -> bool:
-        return self.image is not None and self.strength > 0
+        """True when the image does anything: dynamical map or image-space blend."""
+        return self.image is not None and (self.strength > 0 or self.blend > 0)
 
     @classmethod
     def from_dict(cls, value: Any, path: str = "fractal.map") -> "MapConfig":
         if isinstance(value, MapConfig):
             return value
         data = _require_mapping(value, path)
-        _check_keys(data, ["image", "strength", "size", "mode"], path)
+        _check_keys(data, ["image", "strength", "size", "mode", "blend"], path)
         default = cls()
         return cls(
             image=_as_path(data.get("image"), f"{path}.image"),
             strength=_as_float(data.get("strength", default.strength), f"{path}.strength"),
             size=_as_int(data.get("size", default.size), f"{path}.size", minimum=8),
             mode=_as_choice(data.get("mode", default.mode), cls.MODES, f"{path}.mode"),
+            blend=_as_float(data.get("blend", default.blend), f"{path}.blend"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -463,6 +472,7 @@ class MapConfig:
             "strength": self.strength,
             "size": self.size,
             "mode": self.mode,
+            "blend": self.blend,
         }
 
 

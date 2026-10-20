@@ -68,28 +68,55 @@ class OrbitTrap:
         scale = float(distance.max())
         return cls(distance / scale if scale > 0 else distance, mode)
 
-    def sample(self, z: np.ndarray) -> np.ndarray:
+    def sample(self, z: np.ndarray, domain=None) -> np.ndarray:
         """Distance value for each complex point of ``z`` (flattened output).
 
-        The plane ``[-1, 1] x [-1, 1]`` is mapped onto the bitmap; points outside
-        are clamped to the border, so the trap never produces out-of-range
-        indices.
-        """
-        plane = np.asarray(z, dtype=np.complex128)
-        width, height = self.field.shape
-        x = (width - 1) / 2 * (np.clip(plane.real, -1, 1) + 1)
-        y = (height - 1) / 2 * (np.clip(plane.imag, -1, 1) + 1)
-        i = np.int64(x)
-        j = np.int64(y)
-        base = self.field[i, j]
-        mode = self.mode
+        Two details decide whether a trapped image is actually readable:
 
+        * **Orientation.** Bitmap rows are the imaginary axis, columns the real
+          axis; the previous implementation indexed ``field[real, imag]``, which
+          transposed every trap.
+        * **Mapping.** The plane window comes from the render domain, not from a
+          hard-coded ``[-1, 1]²``. With a fixed window, any zoom or pan clamped
+          every orbit point to the border and the trap went flat.
+
+        Sampling is bilinear: a nearest-neighbour lookup stamps the raster grid
+        into the result as visible squares.
+        """
+        from scipy import ndimage
+
+        plane = np.asarray(z, dtype=np.complex128).reshape(-1)
+        height, width = self.field.shape
+
+        if domain is None:
+            x_min = y_min = -1.0
+            span_x = span_y = 2.0
+        else:
+            x_min, y_min = domain.x_min, domain.y_min
+            span_x, span_y = domain.width, domain.height
+
+        column = (np.real(plane) - x_min) / span_x * (width - 1)
+        row = (np.imag(plane) - y_min) / span_y * (height - 1)
+        inside = (
+            (column >= 0) & (column <= width - 1) & (row >= 0) & (row <= height - 1)
+        )
+        column = np.clip(column, 0, width - 1)
+        row = np.clip(row, 0, height - 1)
+
+        base = np.asarray(
+            ndimage.map_coordinates(self.field, [row, column], order=1, mode="nearest"), dtype=np.float64
+        )
+        # Points outside the window must not pretend to be near the shape.
+        far = float(self.field.max())
+        base = np.where(inside, base, far)
+
+        mode = self.mode
         if mode == 0:
             distance = base * plane
         elif mode == 1:
             distance = base
         elif mode == 2:
-            distance = base * (1 - np.abs(x - i)) * (1 - np.abs(y - j))
+            distance = base * (1 - np.abs(column - np.round(column))) * (1 - np.abs(row - np.round(row)))
         elif mode == 3:
             distance = base * np.arctan(plane)
         elif mode == 4:

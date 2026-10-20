@@ -251,7 +251,7 @@ def _newton(
         previous[index] = magnitude
 
         if distance is not None and trap_field is not None:
-            distance[index] = np.minimum(distance[index], trap_field.sample(current))
+            distance[index] = np.minimum(distance[index], trap_field.sample(current, config.domain))
 
     return iterations, smooth, z, distance
 
@@ -291,7 +291,7 @@ def _halley(
         previous[index] = magnitude
 
         if distance is not None and trap_field is not None:
-            distance[index] = np.minimum(distance[index], trap_field.sample(current))
+            distance[index] = np.minimum(distance[index], trap_field.sample(current, config.domain))
 
     return iterations, smooth, z, distance
 

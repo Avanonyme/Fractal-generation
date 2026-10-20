@@ -52,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     from_image.add_argument("--colours", type=int, default=6, help="number of palette colours")
     from_image.add_argument("--raster-size", type=int, default=96, help="raster resolution")
     from_image.add_argument("--strength", type=float, default=1.4, help="map-modifier strength")
+    from_image.add_argument("--blend", type=float, default=0.8, help="image-space blend (0..1)")
     from_image.add_argument("--raster-only", action="store_true", help="write the assets, skip the render")
     from_image.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="config override")
     from_image.add_argument("-w", "--workers", type=int, help="worker processes (0 = all cores)")
@@ -127,6 +128,7 @@ def _render_from_image(arguments: argparse.Namespace) -> int:
         colours=arguments.colours,
         raster_size=arguments.raster_size,
         strength=arguments.strength,
+        blend=arguments.blend,
         output=target,
         stem=name,
     )

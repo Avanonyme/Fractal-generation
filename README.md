@@ -220,22 +220,33 @@ Three things come out of one picture:
 | raster (`*_raster.png`) | luminance, `--raster-size` square | sampled per pixel as the **map modifier** |
 | trap bitmap | the raster thresholded (Otsu) | orbit trap, so the silhouette also appears in the relief |
 
-The map modifier is what makes the picture readable inside the fractal: each
-pixel's starting luminance scales the Newton damping, so the basin pattern follows
-the image instead of just echoing its outline (a Newton orbit collapses onto a
-root long before it samples much of an orbit trap). The raster is read with
-bilinear interpolation and pre-blurred - a nearest-neighbour lookup stamps the
-raster's own grid into the fractal as square blocks.
+Orbit traps sample the *render domain* (not a hard-coded `[-1, 1]²`, which used to
+clamp every zoomed orbit to the border), index `[row=imag, col=real]` (they used
+to be transposed), interpolate bilinearly, and are seeded with the pixel's own
+position before the iteration starts - otherwise a converging orbit barely
+samples the image at all.
 
-Tuning: `fractal.map.strength`
+Two couplings, because one is not enough:
 
-* `0.5-1.0` - the fractal dominates, the image shows as tonal patches and relief;
-* `1.4` (default) - both readable: fractal filaments over the photo's shapes;
-* `> 2` - the image wins; the fractal flattens into flat colour regions.
+* **`fractal.map.mode` / `strength`** - the dynamical map. `damping` (default)
+  scales the Newton damping per pixel, so the *basin pattern* follows the image;
+  `warp` displaces the starting point along the image gradient. Linear, gentle,
+  stays subtle: a Newton orbit collapses onto a root within a few steps, so a
+  purely dynamical coupling only reshapes the pattern - it cannot paint the photo.
+* **`fractal.map.blend`** (0..1, default `0.8`) - the image-space blend. The
+  finished frame's brightness is multiplied by the raster, so the photo reads
+  directly while every fractal filament survives (`blend: 0` disables it).
 
-`fractal.map.mode` selects the coupling: `damping` (default, strong, non-linear)
-or `warp` (displaces the starting point along the image gradient - linear and
-gentle, stays subtle because the fractal is self-similar).
+The raster is read with bilinear interpolation and pre-blurred: a
+nearest-neighbour lookup stamps the raster grid into the fractal as square blocks.
+
+Tuning:
+
+* `blend 0.8 + strength 1.4` (defaults) - the picture is legible and the fractal
+  texture is visible inside it;
+* `blend 1.0` - the photo dominates; use `strength 0` for a pure "photo made of
+  fractal filaments" overlay;
+* `blend 0.3-0.5` - subtle watermark; `blend 0` - dynamical map only.
 
 At config level it is just two paths plus the palette:
 

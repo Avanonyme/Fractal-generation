@@ -5,18 +5,40 @@
     "size": 1000,
     "iterations": 60,
     "method": "newton",
-    "polynomial": {"mode": "random", "max_degree": 6, "seed": 7},
+    "polynomial": {
+      "mode": "random",
+      "max_degree": 6,
+      "seed": 7
+    },
     "map": {
       "image": "out/from_image_raster.png",
       "strength": 1.4,
       "size": 96,
-      "mode": "damping"
+      "mode": "damping",
+      "blend": 0.8
     },
-    "orbit_trap": {"image": "out/from_image_raster.png", "size": 96, "distance_mode": 1}
+    "orbit_trap": {
+      "image": "out/from_image_raster.png",
+      "size": 96,
+      "distance_mode": 1
+    }
   },
-  "colour": {"mode": "colors", "colors": ["#0b1024", "#33507a", "#7ba7c9", "#e8d8a0", "#f4f1e6"]},
+  "colour": {
+    "mode": "colors",
+    "colors": [
+      "#0b1024",
+      "#33507a",
+      "#7ba7c9",
+      "#e8d8a0",
+      "#f4f1e6"
+    ]
+  },
   "image": {
     "return_type": "iteration",
-    "shading": {"type": "matplotlib", "strength": 0.9, "vertical_exaggeration": 2.0}
+    "shading": {
+      "type": "matplotlib",
+      "strength": 0.9,
+      "vertical_exaggeration": 2.0
+    }
   }
 }

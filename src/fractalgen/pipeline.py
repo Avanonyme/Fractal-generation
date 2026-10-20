@@ -95,9 +95,38 @@ def build_frame(
     if image_config.postprocess:
         rgb = postprocess.apply_all(image_config.postprocess, rgb)
 
+    rgb = _blend_map_image(config, rgb)
+
     if background is not None:
         rgb = render.compose_over(rgb, background, image_config.alpha)
     return rgb
+
+
+def _blend_map_image(config: Config, rgb: np.ndarray) -> np.ndarray:
+    """Modulate the frame's brightness by the map image (image-space blend).
+
+    A dynamical map (``fractal.map.mode``) reshapes the basins, but Newton orbits
+    only visit a small part of the plane, so the picture stays faint. Multiplying
+    the finished frame by the raster keeps every fractal filament while making the
+    source image readable - the "picture made of fractal" look.
+    """
+    map_config = config.fractal.map
+    if not map_config.enabled or map_config.blend <= 0 or map_config.image is None:
+        return rgb
+
+    from PIL import Image
+
+    from .solver import _map_raster
+
+    raster = _map_raster(str(map_config.image), map_config.size)
+    size = np.asarray(rgb).shape[0]
+    if raster.shape[0] != size:
+        resized = Image.fromarray((np.clip(raster, 0, 1) * 255).astype(np.uint8)).resize(
+            (size, size), Image.Resampling.BICUBIC
+        )
+        raster = np.asarray(resized, dtype=np.float64) / 255.0
+    weight = (1.0 - map_config.blend) + map_config.blend * (0.25 + 0.75 * raster)
+    return render.to_uint8(np.clip(np.asarray(rgb, dtype=np.float64) * weight[..., None], 0, 255))
 
 
 def render_image(config: Config, polynomial=None) -> RenderedImage:

@@ -205,6 +205,7 @@ def config_from_image(
     colours: int = 6,
     raster_size: int = 96,
     strength: float = 1.4,
+    blend: float = 0.8,
     output: str | Path | None = None,
     stem: str | None = None,
 ) -> Config:
@@ -228,7 +229,12 @@ def config_from_image(
     mapped = replace(
         fractal,
         orbit_trap=OrbitTrapConfig(image=raster_path, size=raster_size, distance_mode=1),
-        map=MapConfig(image=raster_path, strength=as_float(strength, "image.strength"), size=raster_size),
+        map=MapConfig(
+            image=raster_path,
+            strength=as_float(strength, "image.strength"),
+            size=raster_size,
+            blend=as_float(blend, "image.blend"),
+        ),
     )
     updated = replace(config, fractal=mapped, colour=analysis.palette)
     if target is not None:
