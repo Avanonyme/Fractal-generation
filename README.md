@@ -1,5 +1,10 @@
 # Fractal-generation
 
+> **Status: closed.** This project is archived and no longer maintained. The code
+> is left as it was on the final commit: it builds, its test suite passes, and the
+> documented commands work, but expect no further fixes or features. Issues and
+> pull requests are not monitored.
+
 Procedural root-finding fractals (Newton / Halley, *RFA* and *nova* variants) with
 relief shading, palettes, animations and an optional NFT collection front-end.
 
