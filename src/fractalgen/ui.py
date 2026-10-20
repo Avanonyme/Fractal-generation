@@ -64,6 +64,8 @@ DEFAULT_PORT = 8123
 MAX_BODY_BYTES = 8 * 1024 * 1024
 RENDER_TIMEOUT_SECONDS = 180.0
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
+#: Characters that are safe in a file name once spaces and punctuation are folded.
+_UNSAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class RequestTooLarge(ValueError):
@@ -575,6 +577,26 @@ _SECTION_FORMS: dict[str, list[str]] = {"video": ["video"], "postprocess": ["ima
 # --------------------------------------------------------------------------- #
 # rendering
 # --------------------------------------------------------------------------- #
+def _slug_name(name: str, fallback: str = "upload") -> str:
+    """Turn an arbitrary uploaded file name into a safe one instead of rejecting it.
+
+    ``_safe_name`` is the strict guard used when *reading* an output path; an
+    upload only needs a predictable name, so "pink house.jpg" becomes
+    "pink_house.jpg" rather than an error.
+    """
+    raw = str(name or "").replace("\\", "/")
+    base = Path(raw).name  # drop any directory part
+    if ".." in base:
+        base = base.replace("..", "")
+    stem, dot, suffix = base.rpartition(".")
+    if not dot:
+        stem, suffix = base, ""
+    cleaned_stem = _UNSAFE_CHARS.sub("_", stem).strip("._-") or fallback
+    cleaned_suffix = _UNSAFE_CHARS.sub("", suffix).lower()[:8]
+    candidate = f"{cleaned_stem[:96]}.{cleaned_suffix}" if cleaned_suffix else cleaned_stem[:96]
+    return candidate
+
+
 def _safe_name(name: str) -> str:
     """Reject anything that is not a plain file name inside the output directory."""
     raw = str(name)
@@ -671,7 +693,7 @@ def import_image(payload: Mapping[str, Any]) -> dict[str, Any]:
     encoded = payload.get("data")
     if not isinstance(encoded, str) or not encoded:
         raise ConfigError("data: expected a base64-encoded image")
-    name = _safe_name(str(payload.get("filename", "upload.png")))
+    name = _slug_name(str(payload.get("filename", "upload.png")))
 
     try:
         blob = base64.b64decode(encoded, validate=True)

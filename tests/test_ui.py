@@ -184,9 +184,11 @@ def test_from_image_rejects_garbage(server: str):
     assert status == 400
     assert "base64" in payload["error"]
 
+    # A traversal attempt is folded into a plain name, and the payload is then
+    # rejected for not being an image - never written outside the output dir.
     status, payload = _post(server, "/api/from-image", {"filename": "../escape.png", "data": "AAAA"})
     assert status == 400
-    assert "invalid file name" in payload["error"]
+    assert "escape.png" in payload["error"] or "unsupported" in payload["error"]
 
 
 def test_health(server: str):
@@ -292,3 +294,33 @@ def test_page_has_an_outputs_picker():
     assert 'id="outputs"' in PAGE
     assert "refreshOutputs" in PAGE
     assert "/api/outputs" in PAGE
+
+
+def test_import_accepts_awkward_file_names():
+    from fractalgen.ui import _slug_name
+
+    assert _slug_name("pink house.jpg") == "pink_house.jpg"
+    assert _slug_name("C:\\Photos\\pink house.JPG") == "pink_house.jpg"
+    assert _slug_name("../../etc/passwd") == "passwd"
+    assert _slug_name("") == "upload"
+    assert _slug_name("naïve café.png").endswith(".png")
+
+
+def test_import_image_with_spaces_in_the_name(server: str):
+    import base64
+    import io
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (48, 48), (200, 60, 120)).save(buffer, format="PNG")
+    payload = {
+        "filename": "pink house.png",
+        "data": base64.b64encode(buffer.getvalue()).decode(),
+        "colours": 3,
+        "raster_size": 32,
+    }
+    status, body = _post(server, "/api/from-image", payload)
+    assert status == 200, body
+    assert body["ok"] is True
+    assert body["colours"]
+    assert "@" not in body["raster_url"]
+    assert " " not in body["raster_url"]
